@@ -9,7 +9,7 @@ byte sequence survives a decode/encode cycle. Layouts are documented in
 from __future__ import annotations
 
 import struct
-from typing import NamedTuple
+from typing import Iterator, List, NamedTuple, Tuple
 
 UUID_SIZE = 16
 _U32 = struct.Struct(">I")
@@ -188,6 +188,116 @@ def decode_relationship(data: bytes) -> tuple[str, str, list[str]]:
 
 def encode_u32(value: int) -> bytes:
     return _U32.pack(value)
+
+
+# Edit kind > number of strings after it
+REFERENCE_EDIT_STRINGS = {
+    0: 3,  # parent: node, new parent, flags
+    1: 4,  # addAttr: node, long name, short name, arguments
+    2: 3,  # setAttr: node, attribute, arguments
+    3: 3,  # disconnectAttr: source plug, destination plug, flags
+    4: 3,  # deleteAttr: node, attribute, flags
+    8: 2,  # lock attribute: node, attribute
+    9: 2,  # unlock attribute: node, attribute
+}
+# Kind 5, connectAttr through placeholders, starts with a u32 side: 3 or 4 when
+# one end is referenced (reference node, plug, placeholder, extra), 0 when both
+# are (reference node, source, destination, two placeholders, extra)
+_CONNECTION_EDIT = 5
+
+
+class ReferenceEdit(NamedTuple):
+    """One reference edit. `side` (kind 5 only): 3 when the referenced plug is
+    the source of the connection, 4 when it is the destination, 0 when both
+    ends are referenced."""
+
+    kind: int
+    side: int | None
+    strings: list[str]
+
+
+EditGroup = Tuple[str, List[ReferenceEdit]]
+
+
+class ReferenceEdits(NamedTuple):
+    """`REFE` value: the owning reference node, then two sections of edits
+    grouped by the reference node they apply to. Both sections share one
+    layout; what sends an edit to one or the other is not known yet."""
+
+    owner: str
+    sections: list[list[EditGroup]]
+
+    def all_edits(self) -> Iterator[tuple[str, ReferenceEdit]]:
+        for section in self.sections:
+            for node, edits in section:
+                for edit in edits:
+                    yield node, edit
+
+
+class _Cursor:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.pos = 0
+
+    def string(self) -> str:
+        end = self.data.index(b"\x00", self.pos)
+        text = decode_text(self.data[self.pos : end])
+        self.pos = end + 1
+        return text
+
+    def u32(self) -> int:
+        value = int.from_bytes(self.data[self.pos : self.pos + 4], "big")
+        self.pos += 4
+        return value
+
+
+def _decode_edit(cursor: _Cursor, owner: str) -> ReferenceEdit:
+    kind = cursor.u32()
+    side = None
+    if kind == _CONNECTION_EDIT:
+        side = cursor.u32()
+        count = 6 if side == 0 else 4
+    elif kind in REFERENCE_EDIT_STRINGS:
+        count = REFERENCE_EDIT_STRINGS[kind]
+    else:
+        raise ValueError(f"unknown reference edit kind {kind} in {owner}")
+    return ReferenceEdit(kind, side, [cursor.string() for _ in range(count)])
+
+
+def _decode_section(cursor: _Cursor, owner: str) -> list[EditGroup]:
+    groups = []
+    for _ in range(cursor.u32()):
+        node = cursor.string()
+        groups.append(
+            (node, [_decode_edit(cursor, owner) for _ in range(cursor.u32())])
+        )
+    return groups
+
+
+def decode_reference_edits(value: bytes) -> ReferenceEdits:
+    """Decode a `REFE` value; raises `ValueError` on an edit kind not yet known."""
+    cursor = _Cursor(value)
+    owner = cursor.string()
+    sections = [_decode_section(cursor, owner) for _ in range(2)]
+    if cursor.pos != len(value):
+        raise ValueError(
+            f"{len(value) - cursor.pos} unexpected bytes after the edits of {owner}"
+        )
+    return ReferenceEdits(owner, sections)
+
+
+def encode_reference_edits(edits: ReferenceEdits) -> bytes:
+    parts = [encode_string(edits.owner)]
+    for section in edits.sections:
+        parts.append(_U32.pack(len(section)))
+        for node, node_edits in section:
+            parts += [encode_string(node), _U32.pack(len(node_edits))]
+            for edit in node_edits:
+                parts.append(_U32.pack(edit.kind))
+                if edit.side is not None:
+                    parts.append(_U32.pack(edit.side))
+                parts += [encode_string(s) for s in edit.strings]
+    return b"".join(parts)
 
 
 def type_id_of(form_type: bytes) -> int:
