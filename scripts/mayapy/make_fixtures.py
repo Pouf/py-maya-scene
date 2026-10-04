@@ -101,6 +101,21 @@ cmds.parentConstraint(loc, "grpA")
 cmds.sets("|grpA|cube", "|grpB|cube", name="cubeSet")
 save("names")
 
+# refs: nested, duplicated and deferred references, plus edits on referenced nodes
+cmds.file(new=True, force=True)
+cmds.file("$PY_MAYA_SAMPLES/deps.mb", reference=True, namespace="deps")
+cmds.file("$PY_MAYA_SAMPLES/ref_child.mb", reference=True, namespace="a")
+cmds.file("$PY_MAYA_SAMPLES/ref_child.mb", reference=True, namespace="b")
+cmds.file(
+    "$PY_MAYA_SAMPLES/ref_child.ma",
+    reference=True,
+    namespace="late",
+    deferReference=True,
+)
+cmds.setAttr("a:refCube.translateX", 5)
+set_path("deps:diffuseTex", "fileTextureName", "P:/edited/in/parent.exr")
+save("refs")
+
 log.write("maya %s\nDONE\n" % cmds.about(version=True))
 log.close()
 maya.standalone.uninitialize()
