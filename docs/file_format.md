@@ -144,6 +144,21 @@ u32 is the distance in bytes from the start of the trailer group to the `BCSZ`
 chunk; `BCSZ` ends the file. Resizing `INCL` or `SMTD` changes that distance;
 whether Maya reads it is not probed yet.
 
+### How nodes are named
+
+Measured by renaming nodes in Maya and saving:
+
+- `CREA` parents, `CWFL` and `RELA` name a node by its short name when no
+  other node of the file has it, else by its absolute DAG path
+  (`|grpA|cube`), never a partial path. After a rename Maya re-derives this
+  for every node involved: a name that becomes ambiguous turns into a path,
+  and one that becomes unique turns back into a short name.
+- Reference edits always name DAG nodes by absolute path, other nodes by name.
+- Default nodes keep the root namespace prefix (`:initialShadingGroup`).
+- `cmds.rename` on a transform also renames its shape (`cubeShape` >
+  `grpBShape`); this is the command's behaviour, not something the file
+  requires.
+
 ## Maya ASCII (`.ma`)
 
 A MEL script with LF line endings, in the code page named by its
