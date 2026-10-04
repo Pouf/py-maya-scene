@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 import py_maya
+from py_maya.binary.scene_chunks import decode_metadata
+from py_maya.metadata import ContentTable, path_crc
 from py_maya.models import Dependency, Scene
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
@@ -194,6 +196,15 @@ def test_remap_paths(tmp_path: Path) -> None:
         for d in before
     ]
     assert after == expected
+    # The externalContentTable follows, CRC included
+    data = (tmp_path / "out.mb").read_bytes()
+    smtd = data[data.rfind(b"SMTD") + 16 :]
+    rows = ContentTable(
+        decode_metadata(smtd[: smtd.index(b"endAssociations\n") + 17])
+    ).rows
+    texture_rows = [r for r in rows if r.attribute]
+    assert texture_rows and all(r.path.startswith("Q:/new/") for r in texture_rows)
+    assert all(int(r._tokens[3]) == path_crc(r.path) for r in texture_rows)
 
 
 def test_reference_path_keeps_fref_frdi_and_trailer_in_step(tmp_path: Path) -> None:

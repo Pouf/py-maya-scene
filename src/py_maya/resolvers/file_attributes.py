@@ -28,6 +28,15 @@ def file_attribute_long_names() -> frozenset[str]:
     return frozenset(long for attrs in FILE_ATTRIBUTES.values() for _, long in attrs)
 
 
+def file_attribute_short_name(node_type: str, long_name: str) -> str | None:
+    """Short name of the file path attribute `long_name` of `node_type`."""
+    for current in type_chain(node_type):
+        for short, long in FILE_ATTRIBUTES.get(current, ()):
+            if long == long_name:
+                return short
+    return None
+
+
 @lru_cache(maxsize=None)
 def file_attribute_names(node_type: str) -> frozenset[str]:
     """Short names of the file path attributes of `node_type`, inherited ones included."""

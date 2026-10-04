@@ -35,6 +35,7 @@ _STRING_TAGS = (b"STR ", b"STR#")
 # CREA flag set on DAG nodes only (48k nodes checked against the type hierarchy,
 # fixtures and production files)
 _DAG_FLAG = 0x04
+_TRANSFORM_FLAG = 0x08
 _INDEX = re.compile(r"\[[^\]]*\]")
 
 
@@ -82,6 +83,7 @@ class Attribute:
 
     @value.setter
     def value(self, value: str | list[str] | ReferenceEdits) -> None:
+        self.node.scene._before_edit()
         name, flags, _ = split_attribute(self._chunk.data)
         if self._chunk.tag == b"STR " and isinstance(value, str):
             raw = encode_string(value)
@@ -130,9 +132,7 @@ class Node:
     def name(self) -> str:
         """Name, with its namespace (`ns:target`).
 
-        Setting it renames the node and rewrites every stored reference to
-        it: parents, connections, relationships and reference edits. Unlike
-        `maya.cmds.rename`, a transform's shape keeps its name.
+        Setting it is `rename(value)` with its defaults.
         """
         if self.is_default:
             first = self._group.chunks[0]
@@ -144,6 +144,23 @@ class Node:
     @name.setter
     def name(self, value: str) -> None:
         rename_node(self.scene, self, value)
+
+    def rename(
+        self, new_name: str, *, shapes: bool = True, in_strings: bool = False
+    ) -> None:
+        """Rename the node and rewrite every stored reference to it.
+
+        Rewritten: parents, connections, relationships, reference edits and the
+        externalContentTable (on save). Like `maya.cmds.rename`, renaming a
+        transform also renames its shapes whose name starts with the old name
+        (`boxShape` > `crateShape`), unless `shapes` is False.
+
+        `in_strings` also rewrites node names inside string attribute values
+        that name a node (`"box"`, `"|grp|box.tx"`) and inside the MEL of
+        expressions and script nodes (`getAttr box.ty`). Maya does not, and
+        a string that only looks like a node name (`box.exr`) is rewritten too.
+        """
+        rename_node(self.scene, self, new_name, shapes=shapes, in_strings=in_strings)
 
     def _store_name(self, value: str) -> None:
         self._store_crea(self._crea()._replace(name=value))
@@ -189,6 +206,12 @@ class Node:
         if self.is_default:
             return False
         return bool(self._crea().flags & _DAG_FLAG)
+
+    @property
+    def is_transform(self) -> bool:
+        if self.is_default:
+            return False
+        return bool(self._crea().flags & _TRANSFORM_FLAG)
 
     @property
     def path(self) -> str:
