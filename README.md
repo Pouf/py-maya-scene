@@ -16,14 +16,14 @@ Pre-alpha.
 * `.mb` scene model: version, file info, required plugins, references (at every depth), nodes (name, type, UUID, DAG path), string attribute values, connections
 * Listing and replacing external dependencies in `.mb`: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits)
 * Reference edits: decoded and re-encoded byte for byte (parent, addAttr, setAttr, deleteAttr, connect/disconnectAttr, lock/unlock)
-* Renaming nodes (`node.name = "new"`): parents, connections, relationships and reference edits that name the node or its descendants are rewritten the way Maya writes them (short name when unique, else absolute path), checked against renames done by Maya 2018, 2022 and 2024
+* Renaming nodes (`node.name = "new"`, `node.rename(...)`): parents, connections, relationships, reference edits and the `externalContentTable` that name the node or its descendants are rewritten the way Maya writes them, and a transform's shapes follow like with `maya.cmds.rename`; checked against renames done by Maya 2018, 2022 and 2024. Optionally (`in_strings=True`) also node names in string attributes and in expression / script node MEL, which Maya leaves alone
+* The `externalContentTable` follows remaps, renames and edited path values (CRC included)
 * Saving atomically: `save(path)` refuses to overwrite, `save_in_place()` overwrites the parsed file
 * `maya-inspect`: chunk tree and chunk statistics of a `.mb` file
 
 ### Not supported (yet)
 * `.ma` files
-* Renaming reference nodes and default nodes; names inside MEL (script nodes, expressions) or in string attributes are not rewritten. Unlike `maya.cmds.rename`, renaming a transform leaves its shape's name alone
-* The `externalContentTable` metadata is left as is after a remap (Maya accepts it stale and rebuilds it on save)
+* Renaming reference nodes and default nodes
 
 ### Planned
 * Reading and writing `.ma` with the same guarantees
