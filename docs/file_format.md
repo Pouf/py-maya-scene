@@ -72,10 +72,38 @@ listed by any `PLUG` chunk of their files.
 - The `-op` string caches the referenced file's own header, its `INCL`
   references included. Deferred references have none.
 - The trailer `INCL` lists the top-level reference paths, in `FREF` order.
-- The reference node (`REFN` group) holds a `REFE` chunk: the reference
-  edits. A `setAttr` edit stores `node\0attribute\0` and its MEL arguments
-  (` -type "string" "P:/edited/in/parent.exr"`), with **long** attribute
-  names, so a path set on a referenced node lives there.
+- The reference node (`REFN` group) holds a `REFE` chunk (its `ed`
+  attribute): the reference edits, see below.
+
+### Reference edits (`REFE`)
+
+The value (after `ed\0` and the flag byte) is the owning reference node name,
+then two sections with the same layout: a u32 group count, and per group a
+reference node name, a u32 edit count and the edits. Fixtures always leave the
+first section's groups empty; production files sometimes put parent edits
+there. Each edit is a u32 kind and NUL-terminated strings, as in the
+`dataReferenceEdits` lines of `.ma` files:
+
+| Kind | `.ma` command | Strings |
+|---|---|---|
+| 0 | `parent` | node, new parent, flags (`-s -r `) |
+| 1 | `addAttr` | node, long name, short name, arguments |
+| 2 | `setAttr` | node, attribute, MEL arguments (` -type "string" "P:/a.exr"`) |
+| 3 | `disconnectAttr` | source plug, destination plug, flags (`-na`) |
+| 4 | `deleteAttr` | node, attribute, flags |
+| 5 | `connectAttr` | u32 side, then: side 3 or 4 (the referenced plug is the source or the destination): reference node, plug, placeholder, extra; side 0 (both ends referenced): reference node, source, destination, two placeholders, extra |
+| 8 | lock attribute | node, attribute |
+| 9 | unlock attribute | node, attribute |
+
+Attribute names in edits are **long** names. Nodes are full DAG paths, which
+include the local nodes a referenced node was parented under
+(`|localGrp|e:refCube`). A connection between a local node and a referenced
+node is stored twice: as a plain `CWFL` to the reference node's placeholder
+list (`aRN.phl[1]`) and as a kind 5 edit mapping the placeholder to the
+referenced plug. Parenting a local node under a referenced one creates a local
+`<refNode>fosterParent1` node and a kind 0 edit. Locking a node is not an
+edit. All 786 production `.mb` files decode with these rules and re-encode
+byte for byte (260k edits).
 
 ### Nodes
 
