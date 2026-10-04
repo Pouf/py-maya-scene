@@ -13,11 +13,17 @@ Pre-alpha.
 
 ### Supported
 * Reading and writing the `.mb` chunk tree (Maya 2018 to 2025), byte-identical on round-trip; files the writer could not reproduce are refused at parse time
+* `.mb` scene model: version, file info, required plugins, references (at every depth), nodes (name, type, UUID, DAG path), string attribute values, connections
+* Listing and replacing external dependencies in `.mb`: references, and every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production
+* Saving atomically: `save(path)` refuses to overwrite, `save_in_place()` overwrites the parsed file
 * `maya-inspect`: chunk tree and chunk statistics of a `.mb` file
 
+### Not supported (yet)
+* Paths set on referenced nodes, which Maya stores as reference edits, are neither listed nor remapped
+* `.ma` files
+* The `externalContentTable` metadata is left as is after a remap (Maya accepts it stale and rebuilds it on save)
+
 ### Planned
-* A scene model shared by both formats: header, plugins, references, nodes, attributes, connections
-* Listing and replacing external dependencies (references, textures, caches, audio, plugin files)
 * Renaming nodes, with every connection, selection and reference edit that names them
 * Reading and writing `.ma` with the same guarantees
 * Converting between `.ma` and `.mb`
@@ -32,14 +38,19 @@ uv sync --extra dev
 ## Getting started
 
 ```python
-from py_maya.binary import read_mb, walk, write_mb
+import py_maya
 
-with open("scene.mb", "rb") as f:
-    root = read_mb(f.read())
-for parent, chunk in walk(root):
-    ...
-with open("copy.mb", "wb") as f:
-    write_mb(f, root)
+scene = py_maya.parse("shot.mb")
+for dependency in scene.dependencies():
+    print(dependency.node, dependency.attribute, dependency.path)
+
+# Paths are passed exactly as stored; return None to keep one
+scene.remap_paths(
+    lambda path: path.replace("//server/old_project/", "//server/new_project/", 1)
+    if path.startswith("//server/old_project/")
+    else None
+)
+scene.save("shot_remapped.mb")
 ```
 
 ## Documentation
