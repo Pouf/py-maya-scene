@@ -146,6 +146,23 @@ cmds.setAttr("e:refCube.translateY", lock=False)
 cmds.deleteAttr("e:refCube.extra")
 save("refedits")
 
+
+# Maya's own renames of the scenes above: what py_maya's renames must match
+def save_renamed(source, renames, name):
+    cmds.file(os.path.join(OUT, source), open=True, force=True)
+    for old, new in renames:
+        cmds.rename(old, new)
+    save(name)
+
+
+save_renamed("names.mb", [("|grpA", "grpRenamed")], "names_renamed")
+save_renamed("names.mb", [("|grpA|cube", "grpB")], "names_clash")
+save_renamed(
+    "refedits.mb",
+    [("localGrp", "renamedGrp"), ("localLoc", "renamedLoc")],
+    "refedits_renamed",
+)
+
 log.write("maya %s\nDONE\n" % cmds.about(version=True))
 log.close()
 maya.standalone.uninitialize()
