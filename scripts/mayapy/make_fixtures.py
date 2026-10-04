@@ -147,6 +147,42 @@ cmds.deleteAttr("e:refCube.extra")
 save("refedits")
 
 
+# rename_probe: what else a rename touches (deep duplicate paths, shapes,
+# expressions, string attributes, externalContentTable)
+cmds.file(new=True, force=True)
+root = cmds.group(empty=True, name="root")
+for branch in ("a", "c"):
+    b = cmds.group(
+        empty=True, name="b", parent=cmds.group(empty=True, name=branch, parent=root)
+    )
+    # A unique name until parented: Maya 2018 returns short, ambiguous names
+    cmds.rename(cmds.parent(cmds.spaceLocator(name="leafTmp")[0], b)[0], "leaf")
+cmds.createNode("multiplyDivide", name="md1")
+cmds.connectAttr("|root|a|b|leaf.translateX", "md1.input1X")
+cmds.connectAttr("|root|c|b|leaf.translateY", "md1.input1Y")
+box = cmds.polyCube(name="box")[0]
+orig = cmds.createNode("mesh", name="boxShapeOrig", parent=box)
+cmds.setAttr(orig + ".intermediateObject", 1)
+ball = cmds.polySphere(name="ball")[0]
+cmds.rename(ball + "|ballShape", "customName")
+cmds.expression(
+    name="expr1", string="box.translateX = time * 2;\nball.translateY = box.translateX;"
+)
+cmds.addAttr("ball", longName="targetName", dataType="string")
+set_path("ball", "targetName", "box")
+set_path(
+    cmds.shadingNode("file", asTexture=True, name="tex1"),
+    "fileTextureName",
+    "P:/probe/tex.exr",
+)
+cmds.loadPlugin("gpuCache", quiet=True)
+cache = cmds.createNode(
+    "gpuCache", name="cache1", parent=cmds.createNode("transform", name="cacheParent")
+)
+set_path(cache, "cacheFileName", "P:/probe/cache.abc")
+save("rename_probe")
+
+
 # Maya's own renames of the scenes above: what py_maya's renames must match
 def save_renamed(source, renames, name):
     cmds.file(os.path.join(OUT, source), open=True, force=True)
@@ -162,6 +198,17 @@ save_renamed(
     [("localGrp", "renamedGrp"), ("localLoc", "renamedLoc")],
     "refedits_renamed",
 )
+cmds.file(os.path.join(OUT, "rename_probe.mb"), open=True, force=True)
+for old, new in [
+    ("|root|a", "x"),
+    ("box", "crate"),
+    ("ball", "sphere"),
+    ("tex1", "texRenamed"),
+    ("cacheParent", "cacheGrp"),
+]:
+    cmds.rename(old, new)
+set_path("texRenamed", "fileTextureName", "Q:/probe/new_tex.exr")
+save("rename_probe_renamed")
 
 log.write("maya %s\nDONE\n" % cmds.about(version=True))
 log.close()
