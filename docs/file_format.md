@@ -149,15 +149,41 @@ whether Maya reads it is not probed yet.
 Measured by renaming nodes in Maya and saving:
 
 - `CREA` parents, `CWFL` and `RELA` name a node by its short name when no
-  other node of the file has it, else by its absolute DAG path
-  (`|grpA|cube`), never a partial path. After a rename Maya re-derives this
-  for every node involved: a name that becomes ambiguous turns into a path,
-  and one that becomes unique turns back into a short name.
-- Reference edits always name DAG nodes by absolute path, other nodes by name.
+  other node of the file has it, else by its absolute DAG path, never a
+  partial path: with `|root|a|b|leaf` and `|root|c|b|leaf` the file stores
+  `|root|a|b|leaf.tx`, though `a|b|leaf` would be unique. (Maya's commands
+  show the shortest unique partial path, `x|b|leaf.translateX`; the file does
+  not.) After a rename Maya re-derives this for every node involved: a name
+  that becomes ambiguous turns into a path, one that becomes unique turns
+  back into a short name.
+- Reference edits and the `externalContentTable` always name DAG nodes by
+  absolute path, other nodes by name.
 - Default nodes keep the root namespace prefix (`:initialShadingGroup`).
-- `cmds.rename` on a transform also renames its shape (`cubeShape` >
-  `grpBShape`); this is the command's behaviour, not something the file
-  requires.
+- `cmds.rename` on a transform also renames its direct shape children whose
+  name starts with the old name, by replacing that prefix (`boxShape`,
+  `boxShape1`, `boxShapeOrig`, even `boxer`), namespace included
+  (`ns:boxShape` > `otherShape`). It leaves `myboxShape`, child transforms
+  and deeper nodes alone. Renaming a shape renames nothing else.
+- Expressions store direct attribute references compiled (`.O[0] = time *
+  2;`, the names live in the connections); names inside MEL commands
+  (`getAttr box.ty`) stay as text, and Maya does not update them on rename.
+  Neither does it update string attributes holding a node name.
+
+### externalContentTable
+
+The trailer `DATS` declares the columns (`node`, `key`, `upath`, `upathcrc`,
+`rpath`, `roles`); `SMTD` is `\0raw\0`, the metadata text, `\0`. The text is
+the same in `.ma` (`dataStructure` + `applyMetadata -fmt "raw" -v "..."`):
+a channel, a stream, then per row an index line and a values line,
+`"node" "fileTextureName" "P:/a.exr" 2550333794 "" "sourceImages"`.
+
+- `node`: absolute DAG path or name; a reference's row names its reference
+  node, with an empty key and role `FileRef`.
+- `upathcrc`: zlib CRC-32 of the path in the system code page (1252 here),
+  even in `.mb`, whose text is UTF-8.
+- `rpath`: the resolved path when the file exists, else empty.
+- Maya rewrites the rows when a node is renamed or a path changes, and
+  accepts a stale table on open.
 
 ## Maya ASCII (`.ma`)
 
@@ -171,11 +197,10 @@ the header comments, and some are empty.
 
 ## Shared traps
 
-- Text encoding: `.mb` `STR ` values are UTF-8, but `.ma` text and the
-  `externalContentTable` of both formats use the code page (`upathcrc` is the
-  zlib CRC-32 of the path in that code page).
-- `externalContentTable` (node, attribute, path, CRC, role) lists some file
-  dependencies, but only in about 69% of production `.mb` and 21% of `.ma`,
-  and never Alembic or Arnold nodes. Maya accepts a stale table.
+- Text encoding: `.mb` text is UTF-8 (`STR ` values, metadata); `.ma` text
+  uses the code page of its `//Codeset:` comment. The `externalContentTable`
+  CRC is computed on the code page bytes in both.
+- `externalContentTable` lists some file dependencies, but only in about 69%
+  of production `.mb` and 21% of `.ma`, and never Alembic or Arnold nodes.
 - Maya-native path attributes use forward slashes; plugin attributes store
   what they were given (production Yeti `cfn` values use backslashes).
