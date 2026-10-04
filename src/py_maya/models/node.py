@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 # Chunks in a node group that are not attribute values: addAttr and aliasAttr
 _NOT_VALUES = (b"ATTR", b"ATAL")
+_STRING_TAGS = (b"STR ", b"STR#")
 # CREA flag set on DAG nodes only (48k nodes checked against the type hierarchy,
 # fixtures and production files)
 _DAG_FLAG = 0x04
@@ -165,6 +166,14 @@ class Node:
             Attribute(chunk, self)
             for chunk in self._group.chunks[1:]
             if isinstance(chunk, Chunk) and chunk.tag not in _NOT_VALUES
+        ]
+
+    def _string_attributes(self) -> list[Attribute]:
+        # Tag test first: decoding every attribute name is the cost on big files
+        return [
+            Attribute(chunk, self)
+            for chunk in self._group.chunks[1:]
+            if isinstance(chunk, Chunk) and chunk.tag in _STRING_TAGS
         ]
 
     def attr(self, name: str) -> Attribute:

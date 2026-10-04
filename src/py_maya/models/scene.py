@@ -170,11 +170,7 @@ class Scene:
             if extra:
                 for node_type in type_chain(node.type):
                     names.update(extra.get(node_type, ()))
-            found.extend(
-                a
-                for a in node.attributes
-                if a.leaf_name in names and a.type in ("STR", "STR#")
-            )
+            found.extend(a for a in node._string_attributes() if a.leaf_name in names)
         return found
 
     def dependencies(self, extra: ExtraAttributes | None = None) -> list[Dependency]:
