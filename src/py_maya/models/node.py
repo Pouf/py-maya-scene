@@ -7,10 +7,13 @@ from typing import TYPE_CHECKING
 
 from ..binary import Chunk, GroupChunk
 from ..binary.scene_chunks import (
+    ReferenceEdits,
     decode_crea,
+    decode_reference_edits,
     decode_string,
     decode_string_array,
     decode_text,
+    encode_reference_edits,
     encode_string,
     encode_string_array,
     format_uuid,
@@ -32,11 +35,16 @@ _DAG_FLAG = 0x04
 _INDEX = re.compile(r"\[[^\]]*\]")
 
 
+def leaf_name(attribute: str) -> str:
+    """The attribute itself, without indices or parents (`uvst[0].uvsn` > `uvsn`)."""
+    return _INDEX.sub("", attribute).split(".")[-1]
+
+
 class Attribute:
     """An attribute value stored on a node.
 
     `value` decodes the storage types py_maya understands so far: strings
-    (`STR`) and string arrays (`STR#`).
+    (`STR`), string arrays (`STR#`) and reference edits (`REFE`).
     """
 
     def __init__(self, _chunk: Chunk, node: Node) -> None:
@@ -51,7 +59,7 @@ class Attribute:
     @property
     def leaf_name(self) -> str:
         """Short name of the attribute itself, without indices or parents."""
-        return _INDEX.sub("", self.name).split(".")[-1]
+        return leaf_name(self.name)
 
     @property
     def type(self) -> str:
@@ -59,16 +67,18 @@ class Attribute:
         return self._chunk.tag.decode("ascii").rstrip()
 
     @property
-    def value(self) -> str | list[str]:
+    def value(self) -> str | list[str] | ReferenceEdits:
         _, _, raw = split_attribute(self._chunk.data)
         if self._chunk.tag == b"STR ":
             return decode_string(raw)
         if self._chunk.tag == b"STR#":
             return decode_string_array(raw)
+        if self._chunk.tag == b"REFE":
+            return decode_reference_edits(raw)
         raise NotImplementedError(f"{self.type} values are not decoded yet")
 
     @value.setter
-    def value(self, value: str | list[str]) -> None:
+    def value(self, value: str | list[str] | ReferenceEdits) -> None:
         name, flags, _ = split_attribute(self._chunk.data)
         if self._chunk.tag == b"STR " and isinstance(value, str):
             raw = encode_string(value)
@@ -76,6 +86,8 @@ class Attribute:
             if not all(isinstance(v, str) for v in value):
                 raise TypeError("a string array value must be a list of str")
             raw = encode_string_array(value)
+        elif self._chunk.tag == b"REFE" and isinstance(value, ReferenceEdits):
+            raw = encode_reference_edits(value)
         else:
             raise TypeError(
                 f"cannot store {type(value).__name__} in a {self.type} value"

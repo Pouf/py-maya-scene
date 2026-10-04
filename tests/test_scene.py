@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import py_maya
-from py_maya.models import Scene
+from py_maya.models import Dependency, Scene
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
 MB_FILES = sorted(SAMPLES.glob("*/*.mb"))
@@ -75,7 +75,8 @@ def test_file_paths_match_maya(path: Path) -> None:
         for v in value if isinstance(value, list) else [value]:
             if isinstance(v, str) and v:
                 truth.add(v)
-    found = {d.path for d in scene.dependencies() if d.attribute is not None}
+    # The JSON is made with references unloaded, so it has no edited values
+    found = {d.path for d in scene.dependencies() if d.kind == "attribute"}
     assert found == truth
 
 
@@ -106,6 +107,63 @@ def test_refs_fixture() -> None:
         ("lateRN", 1, True),
     ]
     assert [(r.node, r.depth) for r in scene.nested_references] == [("deps:childRN", 2)]
+    edited = [d for d in scene.dependencies() if d.kind == "reference edit"]
+    assert edited == [
+        Dependency(
+            "P:/edited/in/parent.exr",
+            "deps:diffuseTex",
+            "fileTextureName",
+            "reference edit",
+        )
+    ]
+
+
+@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+def test_reference_edits_round_trip(path: Path) -> None:
+    for attribute, edits in py_maya.parse(path).reference_edits():
+        raw = attribute._chunk.data
+        attribute.value = edits
+        assert attribute._chunk.data == raw
+
+
+def test_reference_edit_kinds() -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / "refedits.mb")
+    ((_, edits),) = scene.reference_edits()
+    (first,), ((node, node_edits),) = edits.sections
+    assert first == ("eRN", []) and node == "eRN"
+    kinds = [e.kind for e in node_edits if "uvSet" not in e.strings[1]]
+    # parent, addAttr, setAttr x2, disconnectAttr x2, deleteAttr,
+    # connectAttr x4, lock, unlock
+    assert kinds == [0, 1, 2, 2, 3, 3, 4, 5, 5, 5, 5, 8, 9]
+    assert node_edits[0].strings == ["|e:refCube", "|localGrp", "-s -r "]
+    assert [e.side for e in node_edits if e.kind == 5] == [3, 4, 0, 3]
+    both_referenced = next(e for e in node_edits if e.side == 0)
+    assert len(both_referenced.strings) == 6
+
+
+def test_extra_attributes_reach_reference_edits() -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / "refedits.mb")
+    assert not [d for d in scene.dependencies() if d.kind == "reference edit"]
+    found = scene.dependencies(extra={"transform": ["note"]})
+    assert [d for d in found if d.kind == "reference edit"] == [
+        Dependency("P:/note.txt", "|localGrp|e:refCube", "note", "reference edit")
+    ]
+
+
+def test_remap_reference_edit(tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
+    assert (
+        scene.remap_paths(
+            lambda p: p.replace("P:/edited", "Q:/a\\b") if "edited" in p else None
+        )
+        == 1
+    )
+    _save(scene, tmp_path)
+    saved = py_maya.parse(tmp_path / "out.mb")
+    assert [d.path for d in saved.dependencies() if d.kind == "reference edit"] == [
+        "Q:/a\\b/in/parent.exr"
+    ]
+    assert b'"Q:/a\\\\b/in/parent.exr"' in (tmp_path / "out.mb").read_bytes()
 
 
 def _save(scene: Scene, tmp_path: Path) -> bytes:

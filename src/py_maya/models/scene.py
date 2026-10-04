@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, NamedTuple
 from ..binary import Chunk, GroupChunk, extent, write_mb
 from ..binary.scene_chunks import (
     Plugin,
+    ReferenceEdit,
+    ReferenceEdits,
     decode_connection,
     decode_file_info,
     decode_includes,
@@ -22,8 +24,13 @@ from ..binary.scene_chunks import (
     split_reference,
 )
 from ..data.node_types import TYPE_NAMES
-from ..resolvers.file_attributes import file_attribute_names, type_chain
-from .node import Attribute, Node
+from ..mel import string_setattr_arguments, string_setattr_value
+from ..resolvers.file_attributes import (
+    file_attribute_long_names,
+    file_attribute_names,
+    type_chain,
+)
+from .node import Attribute, Node, leaf_name
 from .reference import Reference
 
 if TYPE_CHECKING:
@@ -46,14 +53,17 @@ class Connection(NamedTuple):
 class Dependency(NamedTuple):
     """A file path stored in the scene.
 
-    `node` is the long name of the node holding the path (the reference node
-    for a reference); `attribute` is the attribute as stored (`ftn`), or None
-    for the file of a reference.
+    `kind` is `"reference"` (the file of a reference, `attribute` None),
+    `"attribute"` (a value stored on a node of this file; `attribute` as
+    stored, e.g. `ftn`) or `"reference edit"` (a value set on a referenced
+    node; `node` and `attribute` as the edit names them, long attribute name).
+    `node` is a long name; for a reference, the reference node.
     """
 
     path: str
     node: str
     attribute: str | None
+    kind: str
 
 
 class Scene:
@@ -173,19 +183,58 @@ class Scene:
             found.extend(a for a in node._string_attributes() if a.leaf_name in names)
         return found
 
-    def dependencies(self, extra: ExtraAttributes | None = None) -> list[Dependency]:
-        """Every file path the scene stores: references at every depth, then file attributes.
+    def reference_edits(self) -> list[tuple[Attribute, ReferenceEdits]]:
+        """The edits each reference node records, with the attribute holding them."""
+        found = []
+        for node in self._nodes:
+            if node.type == "reference":
+                for attribute in node.attributes:
+                    value = attribute.value if attribute.type == "REFE" else None
+                    if isinstance(value, ReferenceEdits):
+                        found.append((attribute, value))
+        return found
 
-        See `file_attributes` for `extra`.
+    def _file_edits(
+        self, extra: ExtraAttributes | None
+    ) -> list[tuple[Attribute, ReferenceEdits, ReferenceEdit, str]]:
+        # String setAttr edits on a file path attribute, matched by name only
+        names = set(file_attribute_long_names())
+        for attributes in (extra or {}).values():
+            names.update(attributes)
+        found = []
+        for attribute, edits in self.reference_edits():
+            for _, edit in edits.all_edits():
+                if edit.kind != 2 or leaf_name(edit.strings[1]) not in names:
+                    continue
+                value = string_setattr_value(edit.strings[2])
+                if value:
+                    found.append((attribute, edits, edit, value))
+        return found
+
+    def dependencies(self, extra: ExtraAttributes | None = None) -> list[Dependency]:
+        """Every file path the scene stores: references at every depth, file
+        attributes, then file attributes set on referenced nodes.
+
+        See `file_attributes` for `extra`; for reference edits its attribute
+        names apply to every node type, since the edited node's type is not
+        stored in this file.
         """
-        dependencies = [Dependency(r.path, r.node, None) for r in self._all_references]
+        dependencies = [
+            Dependency(r.path, r.node, None, "reference") for r in self._all_references
+        ]
         for attribute in self.file_attributes(extra):
             value = attribute.value
             for path in value if isinstance(value, list) else [value]:
-                if path:
+                if isinstance(path, str) and path:
                     dependencies.append(
-                        Dependency(path, attribute.node.path, attribute.name)
+                        Dependency(
+                            path, attribute.node.path, attribute.name, "attribute"
+                        )
                     )
+        for _, _, edit, path in self._file_edits(extra):
+            dependencies.append(
+                Dependency(path, edit.strings[0], edit.strings[1], "reference edit")
+            )
         return dependencies
 
     def remap_paths(
@@ -195,9 +244,9 @@ class Scene:
     ) -> int:
         """Replace every stored file path `p` with `remap(p)`; return how many changed.
 
-        `remap` returns the new path, or None (or `p`) to keep it. It sees
-        paths exactly as stored, with no normalisation. See `file_attributes`
-        for `extra`.
+        Covers everything `dependencies` lists. `remap` returns the new path,
+        or None (or `p`) to keep it; it sees paths exactly as stored, with no
+        normalisation. See `dependencies` for `extra`.
         """
         changed = 0
         for reference in self._all_references:
@@ -212,11 +261,20 @@ class Scene:
                 if new_values != value:
                     attribute.value = new_values
                     changed += sum(a != b for a, b in zip(value, new_values))
-            elif value:
+            elif isinstance(value, str) and value:
                 new_value = _remapped(remap, value)
                 if new_value != value:
                     attribute.value = new_value
                     changed += 1
+        edited: dict[Attribute, ReferenceEdits] = {}
+        for attribute, edits, edit, path in self._file_edits(extra):
+            new_path = _remapped(remap, path)
+            if new_path != path:
+                edit.strings[2] = string_setattr_arguments(new_path)
+                edited[attribute] = edits
+                changed += 1
+        for attribute, edits in edited.items():
+            attribute.value = edits
         return changed
 
     def _set_reference_path(self, reference: Reference, value: str) -> None:

@@ -19,6 +19,16 @@ def type_chain(node_type: str) -> list[str]:
 
 
 @lru_cache(maxsize=None)
+def file_attribute_long_names() -> frozenset[str]:
+    """Long names of every file path attribute, whatever the node type.
+
+    Reference edits name attributes by long name, and the edited node's type
+    is stored in the referenced file, not in the one holding the edits.
+    """
+    return frozenset(long for attrs in FILE_ATTRIBUTES.values() for _, long in attrs)
+
+
+@lru_cache(maxsize=None)
 def file_attribute_names(node_type: str) -> frozenset[str]:
     """Short names of the file path attributes of `node_type`, inherited ones included."""
     names: set[str] = set()
