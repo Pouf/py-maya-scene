@@ -59,10 +59,23 @@ listed by any `PLUG` chunk of their files.
 
 ### References
 
-- `FRDI`: u32, then `path\0namespace\0`, flag bytes, `refNode\0`, padding, the
-  `-op` options string (`VERS|...|`), the file type (`mayaBinary`).
-- `FREF`: the same without the leading u32.
-- The reference node (`REFN` group) holds `REFE` chunks: reference edits.
+- `FRDI` (`file -rdi`): one per reference at every depth, the references of
+  referenced files included. A u32 depth (1 for this file's own references),
+  then `path\0namespace\0`, a flag byte (1 so far), a deferred flag (1 for
+  `-dr 1`), `refNode\0`, padding, the `-op` options string, the file type
+  (`mayaBinary`, `mayaAscii`).
+- `FREF` (`file -r`): one per top-level reference, the same layout without the
+  depth. Its deferred flag is always 1, like the `-dr 1` of every `file -r`
+  line; only `FRDI` tells deferred references apart.
+- Paths are stored unresolved: environment variables kept, and no `{n}` copy
+  number for a file referenced twice (Maya adds it on load).
+- The `-op` string caches the referenced file's own header, its `INCL`
+  references included. Deferred references have none.
+- The trailer `INCL` lists the top-level reference paths, in `FREF` order.
+- The reference node (`REFN` group) holds a `REFE` chunk: the reference
+  edits. A `setAttr` edit stores `node\0attribute\0` and its MEL arguments
+  (` -type "string" "P:/edited/in/parent.exr"`), with **long** attribute
+  names, so a path set on a referenced node lives there.
 
 ### Nodes
 
@@ -72,8 +85,12 @@ audio, `REFN` reference, `SCRP` script), raw ids for plugin types.
 
 `CREA` (first chunk): flag byte, `name\0`, optional `parent\0`, 16-byte UUID.
 The parent is a short name, or a DAG path (`|grpA|cube`) when the short name
-is not unique. Observed flag bits: `0x80` no parent, `0x01` shared (`-s`),
-`0x04` DAG node, `0x08` transform, `0x10` reference node.
+is not unique. Flag bits: `0x04` DAG node and `0x08` transform (checked on
+48k nodes of fixtures and production files against the type hierarchy);
+observed: `0x80` no parent, `0x01` shared (`-s`), `0x10` reference node.
+
+The UUID's text form (`B6A733A0-4DD6-F4D1-E1A6-3282A7CA548B`) reads the 16
+bytes as four little-endian u32 words.
 
 Attribute chunks follow: the tag is the storage type, the data is
 `shortName\0` + a flag byte + the value. Tags in production: `DBLE`, `DBL2`,
