@@ -1,0 +1,114 @@
+[project]
+name = "py-maya"
+dynamic = ["version"]
+description = "A package for working with Autodesk Maya scene files (.mb, .ma)."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Aurore Delaunay", email = "github.15@audel.ovh"}
+]
+requires-python = ">=3.7"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: File Formats",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Typing :: Typed",
+]
+dependencies = [
+    "importlib_metadata; python_version < '3.8'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.0; python_version >= '3.8'",
+    "mypy>=1.0",
+    "ruff>=0.1",
+]
+docs = [
+    "zensical>=0.0.29; python_version >= '3.10'",
+    "mkdocstrings[python]>=0.24.0; python_version >= '3.10'",
+    "pymdown-extensions>=10.0; python_version >= '3.10'",
+    "ruff>=0.1; python_version >= '3.10'",
+]
+
+[project.scripts]
+maya-inspect = "py_maya.cli.inspect:main"
+
+[project.urls]
+Repository = "https://github.com/Pouf/py-maya"
+Documentation = "https://Pouf.github.io/py-maya/"
+Changelog = "https://github.com/Pouf/py-maya/releases"
+
+[build-system]
+requires = ["hatchling>=1.18", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/py_maya"]
+
+[tool.hatch.build.targets.sdist]
+# samples/ is LFS-backed; a plain checkout would ship pointer files.
+exclude = ["samples"]
+
+[tool.ruff]
+target-version = "py37"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Run inside mayapy, which is Python 2.7 for Maya 2018
+"scripts/mayapy/*" = ["UP"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v -ra --showlocals -n auto --dist worksteal --import-mode=importlib"
+
+[tool.coverage.run]
+source = ["src/py_maya"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+]

@@ -1,0 +1,4 @@
+# Maya writes .ma with LF line endings; byte-identical round-trip forbids any conversion.
+*.ma -text
+*.mb binary
+samples/models/** filter=lfs diff=lfs merge=lfs -text
