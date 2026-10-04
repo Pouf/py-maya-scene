@@ -49,6 +49,7 @@ def set_path(node, attr, value):
 # ref_child: the file the other scenes reference
 cmds.file(new=True, force=True)
 cmds.polyCube(name="refCube")
+cmds.addAttr("refCube", longName="extra", attributeType="double")
 save("ref_child")
 
 # deps: one node per kind of external dependency
@@ -114,7 +115,36 @@ cmds.file(
 )
 cmds.setAttr("a:refCube.translateX", 5)
 set_path("deps:diffuseTex", "fileTextureName", "P:/edited/in/parent.exr")
+# Links between local and referenced nodes, which a rename must follow
+local = cmds.spaceLocator(name="localLoc")[0]
+cmds.connectAttr("a:refCube.translate", local + ".translate")
+cmds.connectAttr(local + ".rotate", "b:refCube.rotate")
+cmds.parent(cmds.group(empty=True, name="localGrp"), "a:refCube")
 save("refs")
+
+# refedits: one reference edit of each kind on a referenced cube
+cmds.file(new=True, force=True)
+cmds.file("$PY_MAYA_SAMPLES/ref_child.mb", reference=True, namespace="e")
+local_grp = cmds.group(empty=True, name="localGrp")
+local = cmds.spaceLocator(name="localLoc")[0]
+cmds.setAttr("e:refCube.translateX", 2)
+cmds.addAttr("e:refCube", longName="note", dataType="string")
+set_path("e:refCube", "note", "P:/note.txt")
+cmds.connectAttr("e:refCube.translate", local + ".translate")
+cmds.connectAttr(local + ".rotate", "e:refCube.rotate")
+cmds.disconnectAttr("e:polyCube1.output", "e:refCubeShape.inMesh")
+cmds.parent("e:refCube", local_grp)
+cmds.lockNode("e:refCubeShape", lock=True)
+shader = cmds.shadingNode("lambert", asShader=True, name="localLambert")
+group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="localSG")
+cmds.connectAttr(shader + ".outColor", group + ".surfaceShader")
+cmds.sets("e:refCubeShape", edit=True, forceElement=group)
+cmds.connectAttr("e:refCube.scaleX", "e:refCube.scaleY")
+cmds.setAttr("e:refCube.translateZ", lock=True)
+cmds.setAttr("e:refCube.translateY", lock=True)
+cmds.setAttr("e:refCube.translateY", lock=False)
+cmds.deleteAttr("e:refCube.extra")
+save("refedits")
 
 log.write("maya %s\nDONE\n" % cmds.about(version=True))
 log.close()
