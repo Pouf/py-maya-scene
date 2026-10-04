@@ -7,12 +7,14 @@ from typing import TYPE_CHECKING
 
 from ..binary import Chunk, GroupChunk
 from ..binary.scene_chunks import (
+    Crea,
     ReferenceEdits,
     decode_crea,
     decode_reference_edits,
     decode_string,
     decode_string_array,
     decode_text,
+    encode_crea,
     encode_reference_edits,
     encode_string,
     encode_string_array,
@@ -22,6 +24,7 @@ from ..binary.scene_chunks import (
     type_id_of,
 )
 from ..data.node_types import DEFAULT_NODES
+from .rename import rename_node
 
 if TYPE_CHECKING:
     from .scene import Scene
@@ -104,6 +107,19 @@ class Node:
     def __init__(self, _group: GroupChunk, scene: Scene) -> None:
         self._group = _group
         self.scene = scene
+        # Decoded CREA, kept because names are read millions of times on big files
+        self._crea_cache: Crea | None = None
+
+    def _crea(self) -> Crea:
+        if self._crea_cache is None:
+            self._crea_cache = decode_crea(self._crea_chunk_data())
+        return self._crea_cache
+
+    def _store_crea(self, crea: Crea) -> None:
+        chunk = self._group.chunks[0]
+        assert isinstance(chunk, Chunk)  # a node group starts with CREA
+        chunk.data = encode_crea(crea)
+        self._crea_cache = crea
 
     @property
     def is_default(self) -> bool:
@@ -112,13 +128,28 @@ class Node:
 
     @property
     def name(self) -> str:
-        """Name, with its namespace (`ns:target`)."""
-        first = self._group.chunks[0]
-        assert isinstance(first, Chunk)  # a node group starts with CREA or SLCT
+        """Name, with its namespace (`ns:target`).
+
+        Setting it renames the node and rewrites every stored reference to
+        it: parents, connections, relationships and reference edits. Unlike
+        `maya.cmds.rename`, a transform's shape keeps its name.
+        """
         if self.is_default:
+            first = self._group.chunks[0]
+            assert isinstance(first, Chunk)  # a select group starts with SLCT
             # Stored with the root namespace prefix (`:time1`)
             return decode_text(first.data)[1:]
-        return decode_crea(first.data).name
+        return self._crea().name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        rename_node(self.scene, self, value)
+
+    def _store_name(self, value: str) -> None:
+        self._store_crea(self._crea()._replace(name=value))
+
+    def _store_parent_name(self, value: str) -> None:
+        self._store_crea(self._crea()._replace(parent=value))
 
     @property
     def type_id(self) -> int | None:
@@ -143,7 +174,7 @@ class Node:
         """Parent as stored: a short name, or a DAG path when the name is ambiguous."""
         if self.is_default:
             return None
-        return decode_crea(self._crea_chunk_data()).parent
+        return self._crea().parent
 
     @property
     def parent(self) -> Node | None:
@@ -157,11 +188,18 @@ class Node:
     def is_dag(self) -> bool:
         if self.is_default:
             return False
-        return bool(self._crea_chunk_data()[0] & _DAG_FLAG)
+        return bool(self._crea().flags & _DAG_FLAG)
 
     @property
     def path(self) -> str:
         """Long name: the full DAG path for DAG nodes, the name otherwise."""
+        cache = self.scene._path_cache
+        path = cache.get(id(self))
+        if path is None:
+            path = cache[id(self)] = self._compute_path()
+        return path
+
+    def _compute_path(self) -> str:
         parent_name = self.parent_name
         if parent_name is None:
             return f"|{self.name}" if self.is_dag else self.name

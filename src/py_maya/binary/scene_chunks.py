@@ -173,16 +173,26 @@ def decode_connection(data: bytes) -> tuple[int, str, str]:
     return data[0], decode_text(source), decode_text(destination)
 
 
+def encode_connection(flags: int, source: str, destination: str) -> bytes:
+    return bytes((flags,)) + encode_string(source) + encode_string(destination)
+
+
 def decode_relationship(data: bytes) -> tuple[str, str, list[str]]:
     """`RELA`: kind, node, u32 count, then that many plugs."""
-    kind_end = data.index(b"\x00")
-    node_end = data.index(b"\x00", kind_end + 1)
-    (count,) = _U32.unpack_from(data, node_end + 1)
-    plugs = data[node_end + 5 :].split(b"\x00")[:count]
+    cursor = _Cursor(data)
+    kind, node = cursor.string(), cursor.string()
+    plugs = [cursor.string() for _ in range(cursor.u32())]
+    if cursor.pos != len(data):
+        raise ValueError(f"unexpected bytes after the relationship plugs: {data!r}")
+    return kind, node, plugs
+
+
+def encode_relationship(kind: str, node: str, plugs: list[str]) -> bytes:
     return (
-        decode_text(data[:kind_end]),
-        decode_text(data[kind_end + 1 : node_end]),
-        [decode_text(p) for p in plugs],
+        encode_string(kind)
+        + encode_string(node)
+        + _U32.pack(len(plugs))
+        + b"".join(encode_string(p) for p in plugs)
     )
 
 

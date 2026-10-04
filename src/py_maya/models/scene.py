@@ -91,6 +91,24 @@ class Scene:
         for plugin in self.plugins:
             self._plugin_types.update(plugin.node_types)
         self._by_name: dict[str, list[Node]] | None = None
+        self._path_cache: dict[int, str] = {}
+
+    def _names(self) -> dict[str, list[Node]]:
+        """Nodes by name, built once and kept up to date by renames."""
+        if self._by_name is None:
+            self._by_name = {}
+            for node in self._nodes:
+                self._by_name.setdefault(node.name, []).append(node)
+        return self._by_name
+
+    def _renamed(self, node: Node, old_name: str, moved: list[Node]) -> None:
+        names = self._names()
+        names[old_name].remove(node)
+        if not names[old_name]:
+            del names[old_name]
+        names.setdefault(node.name, []).append(node)
+        for stale in moved:
+            self._path_cache.pop(id(stale), None)
 
     @property
     def path(self) -> Path | None:
@@ -138,12 +156,8 @@ class Scene:
         return node
 
     def _find(self, name: str) -> Node | None:
-        if self._by_name is None:
-            self._by_name = {}
-            for node in self._nodes:
-                self._by_name.setdefault(node.name, []).append(node)
         short = name.rsplit("|", 1)[-1].lstrip(":")
-        candidates = self._by_name.get(short, [])
+        candidates = self._names().get(short, [])
         if name.startswith("|"):
             candidates = [n for n in candidates if n.path == name]
         elif "|" in name:
@@ -187,7 +201,7 @@ class Scene:
         """The edits each reference node records, with the attribute holding them."""
         found = []
         for node in self._nodes:
-            if node.type == "reference":
+            if node._group.form_type == b"REFN":
                 for attribute in node.attributes:
                     value = attribute.value if attribute.type == "REFE" else None
                     if isinstance(value, ReferenceEdits):
