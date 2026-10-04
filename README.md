@@ -14,12 +14,12 @@ Pre-alpha.
 ### Supported
 * Reading and writing the `.mb` chunk tree (Maya 2018 to 2025), byte-identical on round-trip; files the writer could not reproduce are refused at parse time
 * `.mb` scene model: version, file info, required plugins, references (at every depth), nodes (name, type, UUID, DAG path), string attribute values, connections
-* Listing and replacing external dependencies in `.mb`: references, and every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production
+* Listing and replacing external dependencies in `.mb`: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits)
+* Reference edits: decoded and re-encoded byte for byte (parent, addAttr, setAttr, deleteAttr, connect/disconnectAttr, lock/unlock)
 * Saving atomically: `save(path)` refuses to overwrite, `save_in_place()` overwrites the parsed file
 * `maya-inspect`: chunk tree and chunk statistics of a `.mb` file
 
 ### Not supported (yet)
-* Paths set on referenced nodes, which Maya stores as reference edits, are neither listed nor remapped
 * `.ma` files
 * The `externalContentTable` metadata is left as is after a remap (Maya accepts it stale and rebuilds it on save)
 
