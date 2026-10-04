@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, Optional, Tuple, Union
 
 from ..binary import Chunk, GroupChunk, extent, write_mb
 from ..binary.scene_chunks import (
@@ -15,19 +15,23 @@ from ..binary.scene_chunks import (
     decode_connection,
     decode_file_info,
     decode_includes,
+    decode_metadata,
     decode_plugin,
     decode_reference,
     decode_text,
     encode_includes,
+    encode_metadata,
     encode_text,
     encode_u32,
     split_reference,
 )
 from ..data.node_types import TYPE_NAMES
 from ..mel import string_setattr_arguments, string_setattr_value
+from ..metadata import CODEPAGE, ContentRow, ContentTable
 from ..resolvers.file_attributes import (
     file_attribute_long_names,
     file_attribute_names,
+    file_attribute_short_name,
     type_chain,
 )
 from .node import Attribute, Node, leaf_name
@@ -92,6 +96,57 @@ class Scene:
             self._plugin_types.update(plugin.node_types)
         self._by_name: dict[str, list[Node]] | None = None
         self._path_cache: dict[int, str] = {}
+        # externalContentTable rows bound to what they describe, at the first edit
+        self._content: tuple[Chunk, ContentTable, list[_ContentBinding]] | None = None
+
+    def _before_edit(self) -> None:
+        """Bind the externalContentTable rows while names and paths are unchanged."""
+        if self._content is not None:
+            return
+        chunk = next(
+            (
+                c
+                for c in self._trailer.chunks
+                if isinstance(c, Chunk) and c.tag == b"SMTD"
+            ),
+            None,
+        )
+        bindings: list[_ContentBinding] = []
+        table = ContentTable(decode_metadata(chunk.data) if chunk is not None else "")
+        references = {r.node: r for r in self.references}
+        for row in table.rows:
+            if not row.attribute:
+                if row.node in references:
+                    bindings.append((row, references[row.node], None))
+                continue
+            node = self._find(row.node)
+            short = (
+                file_attribute_short_name(node.type, row.attribute) if node else None
+            )
+            if node is None or short is None:
+                continue
+            for attribute in node._string_attributes():
+                if attribute.name == short:
+                    bindings.append((row, node, attribute))
+        if chunk is not None:
+            self._content = (chunk, table, bindings)
+
+    def _sync_content_table(self) -> None:
+        if self._content is None:
+            return
+        chunk, table, bindings = self._content
+        changed = False
+        for row, owner, attribute in bindings:
+            if attribute is None:
+                node_name, path = row.node, owner.path
+            else:
+                value = attribute.value
+                if not isinstance(value, str):
+                    continue
+                node_name, path = owner.path, value
+            changed |= row.update(node_name, path, _resolved(path), CODEPAGE)
+        if changed:
+            chunk.data = encode_metadata(table.text)
 
     def _names(self) -> dict[str, list[Node]]:
         """Nodes by name, built once and kept up to date by renames."""
@@ -292,6 +347,7 @@ class Scene:
         return changed
 
     def _set_reference_path(self, reference: Reference, value: str) -> None:
+        self._before_edit()
         old = reference.path
         _store_reference_path(reference._chunk, True, value)
         if reference.depth != 1:
@@ -340,6 +396,7 @@ class Scene:
         self._write(self._path)
 
     def _write(self, target: Path) -> None:
+        self._sync_content_table()
         self._update_trailer_offset()
         buffer = io.BytesIO()
         write_mb(buffer, self._root)
@@ -366,3 +423,13 @@ def _store_reference_path(chunk: Chunk, with_depth: bool, value: str) -> None:
 def _remapped(remap: Callable[[str], str | None], path: str) -> str:
     new = remap(path)
     return path if new is None else new
+
+
+def _resolved(path: str) -> str:
+    # Maya stores the resolved path of an existing file, "" otherwise; only
+    # environment variables are resolved here (no workspace or dirmap rules)
+    expanded = os.path.expandvars(path)
+    return expanded.replace("\\", "/") if os.path.isfile(expanded) else ""
+
+
+_ContentBinding = Tuple[ContentRow, Union[Node, Reference], Optional[Attribute]]

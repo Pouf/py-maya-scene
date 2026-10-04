@@ -200,6 +200,20 @@ def encode_u32(value: int) -> bytes:
     return _U32.pack(value)
 
 
+_METADATA_HEAD = b"\x00raw\x00"
+
+
+def decode_metadata(data: bytes) -> str:
+    """`SMTD`: `\\0raw\\0`, metadata text in Maya's raw format (UTF-8), `\\0`."""
+    if not (data.startswith(_METADATA_HEAD) and data.endswith(b"\x00")):
+        raise ValueError(f"unexpected metadata layout: {data[:16]!r}")
+    return decode_text(data[len(_METADATA_HEAD) : -1])
+
+
+def encode_metadata(text: str) -> bytes:
+    return _METADATA_HEAD + encode_text(text) + b"\x00"
+
+
 # Edit kind > number of strings after it
 REFERENCE_EDIT_STRINGS = {
     0: 3,  # parent: node, new parent, flags

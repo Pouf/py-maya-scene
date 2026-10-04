@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Union
 
 from ..binary import Chunk, GroupChunk
 from ..binary.scene_chunks import (
@@ -15,6 +15,7 @@ from ..binary.scene_chunks import (
     encode_relationship,
     encode_text,
 )
+from ..mel import string_setattr_arguments, string_setattr_value
 
 if TYPE_CHECKING:
     from typing import Callable
@@ -25,6 +26,16 @@ if TYPE_CHECKING:
     Rewrite = Callable[[str], str]
 
 NAME = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*:)*[A-Za-z_][A-Za-z0-9_]*")
+_SEGMENT = r"(?:[A-Za-z_]\w*:)*[A-Za-z_]\w*"
+# A whole string naming a node or a plug: `box`, `|grp|box`, `ns:box.tx[0]`
+_REFERENCE = re.compile(rf":?\|?{_SEGMENT}(?:\|{_SEGMENT})*(?:\.[\w\[\].:]+)?")
+# A node named before `.attribute` in MEL text (`getAttr box.ty`, `"box.rz"`);
+# the look-behind skips variables (`$v.x`) and compiled references (`.O[0]`)
+_MEL_PLUG_NODE = re.compile(
+    rf"(?<![\w:|$.])(\|?{_SEGMENT}(?:\|{_SEGMENT})*)(?=\.[A-Za-z_])"
+)
+# Attributes holding MEL: expression text, script node before and after scripts
+_MEL_ATTRIBUTES = {"expression": ("ixp",), "script": ("b", "a")}
 
 # Per reference edit kind, the strings that name a node and those that name a
 # plug (kind 5 by side); the others are attribute names, flags or arguments
@@ -43,28 +54,49 @@ _CONNECTION_PLUGS: dict[int, tuple[int, ...]] = {
     4: (1, 2, 3),
 }
 
+StringValue = Union[str, List[str], ReferenceEdits]
 
-def rename_node(scene: Scene, node: Node, new_name: str) -> None:
-    """Rename `node`, rewriting the parents, connections, relationships and
-    reference edits that name it.
 
-    Like Maya when it saves, a rewritten reference uses the node's short name
-    when no other node of the file has it, else the absolute path. This also
-    applies to references to the nodes that share the old or the new name,
-    whose short names may become unique or ambiguous.
-    """
-    if not isinstance(new_name, str) or not NAME.fullmatch(new_name):
-        raise ValueError(f"invalid node name: {new_name!r}")
+def rename_node(
+    scene: Scene,
+    node: Node,
+    new_name: str,
+    *,
+    shapes: bool = True,
+    in_strings: bool = False,
+) -> None:
+    """Rename `node` and rewrite every stored reference to it (see `Node.rename`)."""
     if node.is_default:
         raise ValueError(f"{node.name} is a default node, the file does not create it")
     if node.type == "reference":
         raise NotImplementedError("renaming reference nodes is not supported yet")
     old_name = node.name
-    if new_name == old_name:
-        return
-    names = scene._names()
-    _check_free(names, node, new_name)
+    plan = [(node, new_name)]
+    if shapes and node.is_transform and new_name != old_name:
+        # Like `maya.cmds.rename`: direct shape children named after the
+        # transform get the new prefix (boxShape, boxShapeOrig, boxer)
+        plan += [
+            (child, new_name + child.name[len(old_name) :])
+            for child in scene._nodes
+            if child.is_dag
+            and not child.is_transform
+            and child.name.startswith(old_name)
+            and child.path.rsplit("|", 1)[0] == node.path
+        ]
+    for target, name in plan:
+        if not isinstance(name, str) or not NAME.fullmatch(name):
+            raise ValueError(f"invalid node name: {name!r}")
+        if name != target.name:
+            _check_free(scene._names(), target, name)
+    scene._before_edit()
+    for target, name in plan:
+        if name != target.name:
+            _rename_one(scene, target, name, in_strings)
 
+
+def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> None:
+    old_name = node.name
+    names = scene._names()
     old_path = node.path
     new_path = old_path[: len(old_path) - len(old_name)] + new_name
     # The node and its descendants change path; nodes sharing the old or new
@@ -115,6 +147,10 @@ def rename_node(scene: Scene, node: Node, new_name: str) -> None:
     rewrite_node, rewrite_plug = rewriters(shortest_name)
     edit_node, edit_plug = rewriters(full_name)
 
+    def rewrite_keeping_form(text: str) -> str:
+        # Strings written by people: keep a path a path, a short name short
+        return (edit_plug if text.lstrip(":").startswith("|") else rewrite_plug)(text)
+
     # Any string naming an affected node contains the old or the new name
     # (a path to a descendant contains the old one): skip the others undecoded
     needles = (old_name, new_name)
@@ -136,8 +172,33 @@ def rename_node(scene: Scene, node: Node, new_name: str) -> None:
             if data != chunk.data:
                 writes.append(partial(_store_data, chunk, data))
     for attribute, edits in scene.reference_edits():
-        if _rewrite_edits(edits, edit_node, edit_plug):
+        changed = _rewrite_edits(edits, edit_node, edit_plug)
+        if in_strings:
+            changed |= _rewrite_edit_strings(edits, rewrite_keeping_form)
+        if changed:
             writes.append(partial(_store_value, attribute, edits))
+    if in_strings:
+        for other in scene._nodes:
+            mel = _MEL_ATTRIBUTES.get(other.type, ())
+            for attribute in other._string_attributes():
+                if not any(n in attribute._chunk.data for n in byte_needles):
+                    continue
+                value = attribute.value
+                new_value: StringValue
+                if isinstance(value, str) and attribute.leaf_name in mel:
+                    new_value = _MEL_PLUG_NODE.sub(
+                        lambda m: rewrite_keeping_form(m.group(1)), value
+                    )
+                elif isinstance(value, str):
+                    new_value = _rewrite_reference(value, rewrite_keeping_form)
+                elif isinstance(value, list):
+                    new_value = [
+                        _rewrite_reference(v, rewrite_keeping_form) for v in value
+                    ]
+                else:
+                    continue
+                if new_value != value:
+                    writes.append(partial(_store_value, attribute, new_value))
     writes.append(partial(node._store_name, new_name))
     for write in writes:
         write()
@@ -146,6 +207,10 @@ def rename_node(scene: Scene, node: Node, new_name: str) -> None:
 
 def _is_below(path: str, ancestor: str) -> bool:
     return path.startswith(ancestor + "|")
+
+
+def _rewrite_reference(text: str, rewrite: Rewrite) -> str:
+    return rewrite(text) if _REFERENCE.fullmatch(text) else text
 
 
 def _check_free(names: dict[str, list[Node]], node: Node, new_name: str) -> None:
@@ -209,9 +274,22 @@ def _rewrite_edits(
     return changed
 
 
+def _rewrite_edit_strings(edits: ReferenceEdits, rewrite: Rewrite) -> bool:
+    # String values set on referenced nodes (kind 2, ` -type "string" "..."`)
+    changed = False
+    for _, edit in edits.all_edits():
+        value = string_setattr_value(edit.strings[2]) if edit.kind == 2 else None
+        if value is not None:
+            new = _rewrite_reference(value, rewrite)
+            if new != value:
+                edit.strings[2] = string_setattr_arguments(new)
+                changed = True
+    return changed
+
+
 def _store_data(chunk: Chunk, data: bytes) -> None:
     chunk.data = data
 
 
-def _store_value(attribute: Attribute, value: ReferenceEdits) -> None:
+def _store_value(attribute: Attribute, value: StringValue) -> None:
     attribute.value = value
