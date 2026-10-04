@@ -128,11 +128,12 @@ def write_mb(fp: BinaryIO, root: GroupChunk) -> int:
 
 def _size(chunk: AnyChunk) -> int:
     if isinstance(chunk, GroupChunk):
-        return 4 + sum(_extent(child) for child in chunk.chunks)
+        return 4 + sum(extent(child) for child in chunk.chunks)
     return len(chunk.data)
 
 
-def _extent(chunk: AnyChunk) -> int:
+def extent(chunk: AnyChunk) -> int:
+    """Bytes `chunk` occupies in a file: header, body and padding."""
     if isinstance(chunk, GroupChunk):
         return _HEADER.size + _size(chunk)
     return _HEADER.size + _padded(len(chunk.data))
