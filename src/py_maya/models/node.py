@@ -140,49 +140,86 @@ class Node:
     def path(self) -> str:
         """Long name: the full DAG path for DAG nodes, the name otherwise."""
         cache = self.scene._path_cache
-        path = cache.get(id(self))
-        if path is None:
-            path = cache[id(self)] = self._compute_path()
-        return path
+        cached = cache.get(id(self))
+        if cached is not None:
+            return cached
+        # Walk up, not recurse: rigs nest joints hundreds of levels deep
+        chain: list[Node] = []
+        node = self
+        prefix: str | None = None
+        while True:
+            chain.append(node)
+            parent_name = node.parent_name
+            if parent_name is None:
+                break
+            if parent_name.startswith("|"):
+                # An absolute path is the parent's path already
+                prefix = parent_name
+                break
+            parent = self.scene._find(parent_name, primary=True)
+            if parent is None:
+                # Parent outside this file (a referenced node): the best known path
+                prefix = f"|{parent_name}"
+                break
+            if "|" in parent_name or id(parent) in cache:
+                prefix = parent.path
+                break
+            if len(chain) > len(self.scene._nodes):
+                raise ValueError(f"the parents of {self.name} form a loop")
+            node = parent
+        for node in reversed(chain):
+            if prefix is None:
+                path = f"|{node.name}" if node.is_dag else node.name
+            else:
+                path = f"{prefix}|{node.name}"
+            cache[id(node)] = path
+            prefix = path
+        return cache[id(self)]
 
     @property
     def paths(self) -> list[str]:
         """Every DAG path of the node, `path` first: one per parent (instancing
         adds parents), times the paths of each parent."""
-        cache = self.scene._paths_cache
-        paths = cache.get(id(self))
-        if paths is None:
-            paths = cache[id(self)] = self._compute_paths()
-        return paths
-
-    def _compute_paths(self) -> list[str]:
-        parent_names = [] if self.parent_name is None else [self.parent_name]
-        parent_names += self.scene._instance_parents().get(id(self), [])
-        if not parent_names:
+        if not self.scene._instance_parents():
             return [self.path]
-        paths = []
-        for parent_name in parent_names:
-            parent = self.scene._find(parent_name)
-            if parent is None:
-                prefix = (
-                    parent_name if parent_name.startswith("|") else f"|{parent_name}"
-                )
-                paths.append(f"{prefix}|{self.name}")
-            else:
-                paths += [f"{p}|{self.name}" for p in parent.paths]
-        return paths
+        cache = self.scene._paths_cache
+        # Parents first, without recursing (see `path`); a node met again
+        # while its parents are pending is its own ancestor
+        stack = [self]
+        expanded: set[int] = set()
+        while stack:
+            node = stack[-1]
+            if id(node) in cache:
+                stack.pop()
+                continue
+            parents = node._parents()
+            pending = [p for _, p in parents if p is not None and id(p) not in cache]
+            if pending:
+                if id(node) in expanded:
+                    raise ValueError(f"the parents of {node.name} form a loop")
+                expanded.add(id(node))
+                stack += pending
+                continue
+            stack.pop()
+            paths = []
+            for parent_name, parent in parents:
+                if parent is None:
+                    prefix = (
+                        parent_name
+                        if parent_name.startswith("|")
+                        else f"|{parent_name}"
+                    )
+                    paths.append(f"{prefix}|{node.name}")
+                else:
+                    paths += [f"{p}|{node.name}" for p in cache[id(parent)]]
+            cache[id(node)] = paths or [node.path]
+        return cache[id(self)]
 
-    def _compute_path(self) -> str:
-        parent_name = self.parent_name
-        if parent_name is None:
-            return f"|{self.name}" if self.is_dag else self.name
-        # Primary paths only: instance parents are resolved from primary paths
-        parent = self.scene._find(parent_name, primary=True)
-        if parent is not None:
-            return f"{parent.path}|{self.name}"
-        # Parent outside this file (a referenced node): the best known path
-        prefix = parent_name if parent_name.startswith("|") else f"|{parent_name}"
-        return f"{prefix}|{self.name}"
+    def _parents(self) -> list[tuple[str, Node | None]]:
+        """Parent names, the primary one first, with the nodes they name."""
+        names = [] if self.parent_name is None else [self.parent_name]
+        names += self.scene._instance_parents().get(id(self), [])
+        return [(name, self.scene._find(name)) for name in names]
 
     @property
     def attributes(self) -> list[Attribute]:
