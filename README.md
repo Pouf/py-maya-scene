@@ -12,21 +12,22 @@ Maya Binary files (`.mb`) are IFF chunk trees; Maya ASCII files (`.ma`) are MEL 
 Pre-alpha.
 
 ### Supported
-* Reading and writing the `.mb` chunk tree (Maya 2018 to 2025), byte-identical on round-trip; files the writer could not reproduce are refused at parse time
-* `.mb` scene model: version, file info, required plugins, references (at every depth), nodes (name, type, UUID, DAG path), string attribute values, connections
-* Listing and replacing external dependencies in `.mb`: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits)
+Everything below works the same on `.mb` and `.ma` (Maya 2018 to 2025), through one scene model.
+
+* Byte-identical round-trip: parse then save without edits gives the same bytes (all 771 production `.mb` and 3300 of 3305 production `.ma`; files that cannot be reproduced are refused at parse time); edits rewrite only the values they change, keeping Maya's own layout around them
+* Scene model: version, file info, required plugins, references (at every depth, with file type), nodes (name, type, UUID, DAG paths including instances), string attribute values, connections
+* Listing and replacing external dependencies: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits). A reference moved to a `.ma` or `.mb` file gets the matching file type
 * Reference edits: decoded and re-encoded byte for byte (parent, addAttr, setAttr, deleteAttr, connect/disconnectAttr, lock/unlock)
-* Renaming nodes (`node.name = "new"`, `node.rename(...)`): parents, connections, relationships, reference edits and the `externalContentTable` that name the node or its descendants are rewritten the way Maya writes them, and a transform's shapes follow like with `maya.cmds.rename`; checked against renames done by Maya 2018, 2022 and 2024. Optionally (`in_strings=True`) also node names in string attributes and in expression / script node MEL, which Maya leaves alone
+* Renaming nodes (`node.name = "new"`, `node.rename(...)`): parents, connections, relationships, instances, reference edits and the `externalContentTable` that name the node or its descendants are rewritten the way Maya writes them, and a transform's shapes follow like with `maya.cmds.rename`; checked against renames done by Maya 2018, 2022 and 2024. Optionally (`in_strings=True`) also node names in string attributes and in expression / script node MEL, which Maya leaves alone
 * The `externalContentTable` follows remaps, renames and edited path values (CRC included)
 * Saving atomically: `save(path)` refuses to overwrite, `save_in_place()` overwrites the parsed file
 * `maya-inspect`: chunk tree and chunk statistics of a `.mb` file
 
 ### Not supported (yet)
-* `.ma` files
 * Renaming reference nodes and default nodes
+* Values other than strings (numbers, matrices, meshes) are kept as stored but not decoded
 
 ### Planned
-* Reading and writing `.ma` with the same guarantees
 * Converting between `.ma` and `.mb`
 * A `maya.cmds`-like API on a scene file
 

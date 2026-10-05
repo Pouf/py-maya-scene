@@ -35,6 +35,7 @@ FOR8 Maya
   FOR8 FREF            one per reference (file -r)
   FOR8 <type id>       one per created node
   FOR8 SLCT            one per default node with edited attributes (select -ne)
+  FOR8 PING            one per extra parent of an instanced node (parent -add)
   LIS8 CONS
     FOR8 CONN          connections and relationships
   FOR8 HEAD            trailer
@@ -128,6 +129,16 @@ Attribute chunks follow: the tag is the storage type, the data is
 integers, enums and times (as int64 ticks), so decoding a value needs the
 attribute's type.
 
+### Instances
+
+A root `FOR8 PING` group holds one `PRNT` chunk per extra parent (`parent
+-add` in `.ma`): a flag byte, the instanced node's absolute path, then the
+extra parent (`\x02|hero|heroShape\0heroInstance\0`). An instanced node, and
+every node below it, then has one DAG path per parent; connections name each
+instance by its full path (`|copies|heroInstance|heroShape.iog`), never by
+the short name, even when no other node shares it. No production `.mb` uses
+instancing; 2774 `parent -add` statements appear in production `.ma` files.
+
 ### Selections and connections
 
 - `SLCT` group: a `SLCT` chunk with the node name (`:time1`, no NUL), then
@@ -190,10 +201,34 @@ a channel, a stream, then per row an index line and a values line,
 A MEL script with LF line endings, in the code page named by its
 `//Codeset:` comment (1252 for every production file). Statements in order:
 `file -rdi` / `file -r` per reference, `requires`, `currentUnit`, `fileInfo`,
-then `createNode` blocks (with `rename -uid`, `setAttr`, `addAttr`), `select
--ne` blocks for default nodes, `connectAttr` / `relationship`, and an
-optional `dataStructure` + `applyMetadata` pair. Some production files lack
-the header comments, and some are empty.
+then `createNode` blocks, `select -ne` blocks for default nodes,
+`connectAttr` / `relationship` / `parent -add` (instances), and an optional
+`dataStructure` + `applyMetadata` pair, then a `// End of` comment. Some
+production files lack the header comments, and some are empty. 3300 of the
+3305 production `.ma` files split into `;`-terminated statements and join back
+byte for byte; the other 5 hold `.mb` chunks partway through.
+
+- A node is `createNode <type> [-s] -n "name" [-p "parent"]`, followed by its
+  own statements: `rename -uid "<UUID>"`, `setAttr`, `addAttr`, `lockNode`.
+  The parent is named like in `.mb` (short name, else absolute path).
+- `setAttr ".attr" [-type "<type>"] values`: the attribute is the first
+  string; strings use `-type "string"`, string arrays `-type "stringArray"`
+  with a count, reference edits `-type "dataReferenceEdits"`.
+- References: `file -rdi <depth> -ns "ns" [-dr 1] -rfn "RN" [-op "..."] -typ
+  "<type>" "path"` at every depth, and `file -r` for the top level. `-typ`
+  must match the file: a `.ma` path with `-typ "mayaBinary"` loads nothing,
+  silently (the reference still reports loaded). The same holds for the file
+  type string of `.mb` `FRDI`/`FREF`.
+- `dataReferenceEdits`: the owner, then every group of both sections in one
+  list (`"node" count` and the edits), with no section counts. The first
+  section ends with the owner's own group (all fixtures and production
+  files). Edit arguments are MEL inside a MEL string, so escaped twice. Maya
+  2018 to 2022 write the node of an addAttr edit as a bare word
+  (`1 |grp|ns:node "note" "note" ...`).
+- `applyMetadata -fmt "raw" -v "<text>"` holds the externalContentTable text.
+- Opening a `.ma`, Maya keeps its own node (and UUID) for the nodes every
+  scene starts with (`lightLinker1`, `layerManager`, `renderLayerManager`),
+  though the file stores a UUID for them.
 
 ## Shared traps
 
