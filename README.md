@@ -53,6 +53,11 @@ scene.remap_paths(
     else None
 )
 scene.save("shot_remapped.mb")
+
+# Shapes, parents, connections, reference edits and the externalContentTable follow
+scene = py_maya.parse("asset.ma")
+scene.node("box").name = "crate"
+scene.save("asset_renamed.ma")
 ```
 
 ## Documentation
