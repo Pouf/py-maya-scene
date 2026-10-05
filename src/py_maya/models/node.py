@@ -5,37 +5,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from ..binary import Chunk, GroupChunk
-from ..binary.scene_chunks import (
-    Crea,
-    ReferenceEdits,
-    decode_crea,
-    decode_reference_edits,
-    decode_string,
-    decode_string_array,
-    decode_text,
-    encode_crea,
-    encode_reference_edits,
-    encode_string,
-    encode_string_array,
-    format_uuid,
-    join_attribute,
-    split_attribute,
-    type_id_of,
-)
-from ..data.node_types import DEFAULT_NODES
 from .rename import rename_node
 
 if TYPE_CHECKING:
+    from ..storage.base import AttributeRecord, AttributeValue, NodeRecord
     from .scene import Scene
 
-# Chunks in a node group that are not attribute values: addAttr and aliasAttr
-_NOT_VALUES = (b"ATTR", b"ATAL")
-_STRING_TAGS = (b"STR ", b"STR#")
-# CREA flag set on DAG nodes only (48k nodes checked against the type hierarchy,
-# fixtures and production files)
-_DAG_FLAG = 0x04
-_TRANSFORM_FLAG = 0x08
 _INDEX = re.compile(r"\[[^\]]*\]")
 
 
@@ -51,14 +26,14 @@ class Attribute:
     (`STR`), string arrays (`STR#`) and reference edits (`REFE`).
     """
 
-    def __init__(self, _chunk: Chunk, node: Node) -> None:
-        self._chunk = _chunk
+    def __init__(self, _record: AttributeRecord, node: Node) -> None:
+        self._record = _record
         self.node = node
 
     @property
     def name(self) -> str:
         """Name as stored: short name, with indices and parents (`uvst[0].uvsn`)."""
-        return split_attribute(self._chunk.data)[0]
+        return self._record.name
 
     @property
     def leaf_name(self) -> str:
@@ -67,37 +42,19 @@ class Attribute:
 
     @property
     def type(self) -> str:
-        """Storage type: the chunk tag (`STR`, `STR#`, `DBLE`, `DBL3`, ...)."""
-        return self._chunk.tag.decode("ascii").rstrip()
+        """Storage type: `STR`, `STR#`, `REFE`, else the format's own name for it."""
+        return self._record.type
 
     @property
-    def value(self) -> str | list[str] | ReferenceEdits:
-        _, _, raw = split_attribute(self._chunk.data)
-        if self._chunk.tag == b"STR ":
-            return decode_string(raw)
-        if self._chunk.tag == b"STR#":
-            return decode_string_array(raw)
-        if self._chunk.tag == b"REFE":
-            return decode_reference_edits(raw)
-        raise NotImplementedError(f"{self.type} values are not decoded yet")
+    def value(self) -> AttributeValue:
+        return self._record.get_value()
 
     @value.setter
-    def value(self, value: str | list[str] | ReferenceEdits) -> None:
+    def value(self, value: AttributeValue) -> None:
+        if isinstance(value, list) and not all(isinstance(v, str) for v in value):
+            raise TypeError("a string array value must be a list of str")
         self.node.scene._before_edit()
-        name, flags, _ = split_attribute(self._chunk.data)
-        if self._chunk.tag == b"STR " and isinstance(value, str):
-            raw = encode_string(value)
-        elif self._chunk.tag == b"STR#" and isinstance(value, list):
-            if not all(isinstance(v, str) for v in value):
-                raise TypeError("a string array value must be a list of str")
-            raw = encode_string_array(value)
-        elif self._chunk.tag == b"REFE" and isinstance(value, ReferenceEdits):
-            raw = encode_reference_edits(value)
-        else:
-            raise TypeError(
-                f"cannot store {type(value).__name__} in a {self.type} value"
-            )
-        self._chunk.data = join_attribute(name, flags, raw)
+        self._record.set_value(value)
 
     def __repr__(self) -> str:
         return f"Attribute({self.node.name}.{self.name}, {self.type})"
@@ -106,27 +63,14 @@ class Attribute:
 class Node:
     """A node the file creates, or a default node whose attributes it edits."""
 
-    def __init__(self, _group: GroupChunk, scene: Scene) -> None:
-        self._group = _group
+    def __init__(self, _record: NodeRecord, scene: Scene) -> None:
+        self._record = _record
         self.scene = scene
-        # Decoded CREA, kept because names are read millions of times on big files
-        self._crea_cache: Crea | None = None
-
-    def _crea(self) -> Crea:
-        if self._crea_cache is None:
-            self._crea_cache = decode_crea(self._crea_chunk_data())
-        return self._crea_cache
-
-    def _store_crea(self, crea: Crea) -> None:
-        chunk = self._group.chunks[0]
-        assert isinstance(chunk, Chunk)  # a node group starts with CREA
-        chunk.data = encode_crea(crea)
-        self._crea_cache = crea
 
     @property
     def is_default(self) -> bool:
         """True for a node the file does not create (a `select -ne` block)."""
-        return self._group.form_type == b"SLCT"
+        return self._record.is_default
 
     @property
     def name(self) -> str:
@@ -134,12 +78,7 @@ class Node:
 
         Setting it is `rename(value)` with its defaults.
         """
-        if self.is_default:
-            first = self._group.chunks[0]
-            assert isinstance(first, Chunk)  # a select group starts with SLCT
-            # Stored with the root namespace prefix (`:time1`)
-            return decode_text(first.data)[1:]
-        return self._crea().name
+        return self._record.name
 
     @name.setter
     def name(self, value: str) -> None:
@@ -162,36 +101,24 @@ class Node:
         """
         rename_node(self.scene, self, new_name, shapes=shapes, in_strings=in_strings)
 
-    def _store_name(self, value: str) -> None:
-        self._store_crea(self._crea()._replace(name=value))
-
-    def _store_parent_name(self, value: str) -> None:
-        self._store_crea(self._crea()._replace(parent=value))
-
     @property
     def type_id(self) -> int | None:
-        """Type id, or None for a default node (select blocks do not store it)."""
-        return None if self.is_default else type_id_of(self._group.form_type)
+        """Type id, or None when unknown (default nodes, plugin types in `.ma`)."""
+        return self._record.type_id
 
     @property
     def type(self) -> str:
-        """Type name, `0x...` for an unknown type id, `""` for an unknown default node."""
-        if self.type_id is None:
-            return DEFAULT_NODES.get(self.name, "")
-        return self.scene._type_name(self.type_id)
+        """Type name, `0x...` for an unknown `.mb` type id, `""` for an unknown default node."""
+        return self._record.type_name
 
     @property
     def uuid(self) -> str | None:
-        if self.is_default:
-            return None
-        return format_uuid(self._crea_chunk_data()[-16:])
+        return self._record.uuid
 
     @property
     def parent_name(self) -> str | None:
         """Parent as stored: a short name, or a DAG path when the name is ambiguous."""
-        if self.is_default:
-            return None
-        return self._crea().parent
+        return self._record.parent_name
 
     @property
     def parent(self) -> Node | None:
@@ -203,15 +130,11 @@ class Node:
 
     @property
     def is_dag(self) -> bool:
-        if self.is_default:
-            return False
-        return bool(self._crea().flags & _DAG_FLAG)
+        return self._record.is_dag
 
     @property
     def is_transform(self) -> bool:
-        if self.is_default:
-            return False
-        return bool(self._crea().flags & _TRANSFORM_FLAG)
+        return self._record.is_transform
 
     @property
     def path(self) -> str:
@@ -235,19 +158,10 @@ class Node:
 
     @property
     def attributes(self) -> list[Attribute]:
-        return [
-            Attribute(chunk, self)
-            for chunk in self._group.chunks[1:]
-            if isinstance(chunk, Chunk) and chunk.tag not in _NOT_VALUES
-        ]
+        return [Attribute(r, self) for r in self._record.attributes()]
 
     def _string_attributes(self) -> list[Attribute]:
-        # Tag test first: decoding every attribute name is the cost on big files
-        return [
-            Attribute(chunk, self)
-            for chunk in self._group.chunks[1:]
-            if isinstance(chunk, Chunk) and chunk.tag in _STRING_TAGS
-        ]
+        return [Attribute(r, self) for r in self._record.string_attributes()]
 
     def attr(self, name: str) -> Attribute:
         """The stored attribute named `name` (as stored, e.g. `ftn` or `uvst[0].uvsn`)."""
@@ -255,11 +169,6 @@ class Node:
             if attribute.name == name:
                 return attribute
         raise KeyError(f"{self.name} stores no value for {name!r}")
-
-    def _crea_chunk_data(self) -> bytes:
-        first = self._group.chunks[0]
-        assert isinstance(first, Chunk)  # a node group starts with CREA
-        return first.data
 
     def __repr__(self) -> str:
         return f"Node({self.path!r}, {self.type!r})"

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .binary import read_mb
+from .binary import GROUP_TAGS
 from .models import Scene
+from .storage.ma import MaScene
+from .storage.mb import MbScene
 
 try:
     import importlib.metadata as importlib_metadata
@@ -22,6 +24,8 @@ __all__ = ["Scene", "parse"]
 
 
 def parse(path: str | Path) -> Scene:
-    """Parse a Maya Binary (`.mb`) file."""
+    """Parse a Maya scene file, `.mb` or `.ma` (told apart by content, not extension)."""
     path = Path(path)
-    return Scene(read_mb(path.read_bytes()), path)
+    data = path.read_bytes()
+    storage = MbScene(data) if data[:4] in GROUP_TAGS else MaScene(data)
+    return Scene(storage, path)
