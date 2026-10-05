@@ -185,16 +185,18 @@ class Scene:
         node's paths unless `primary`)."""
         short = name.rsplit("|", 1)[-1].lstrip(":")
         candidates = self._names().get(short, [])
-        if "|" in name:
-            suffix = name if name.startswith("|") else f"|{name}"
-            exact = name.startswith("|")
+        if name.startswith("|"):
+            # A full path names one node: primary paths first, they are cheap
+            exact = [n for n in candidates if n.path == name]
+            if not exact and not primary:
+                exact = [n for n in candidates if name in n.paths]
+            candidates = exact
+        elif "|" in name:
+            suffix = f"|{name}"
             candidates = [
                 n
                 for n in candidates
-                if any(
-                    p == name if exact else p.endswith(suffix)
-                    for p in ([n.path] if primary else n.paths)
-                )
+                if any(p.endswith(suffix) for p in ([n.path] if primary else n.paths))
             ]
         if len(candidates) > 1:
             raise ValueError(f"{name!r} matches several nodes")

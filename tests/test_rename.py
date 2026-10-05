@@ -182,6 +182,41 @@ def test_rename_reference_node_is_not_supported(ext: str) -> None:
         scene.node("aRN").name = "otherRN"
 
 
+def test_deep_hierarchy(tmp_path: Path) -> None:
+    # Deeper than the recursion limit. The first names repeat under `m`, so
+    # their children name them by full path; the deepest node is instanced
+    depth, repeated = 1500, 400
+    lines = []
+    prefix = ""
+    for i in range(depth):
+        parent = prefix if i <= repeated else f"j{i - 1}"
+        lines.append(
+            f'createNode transform -n "j{i}"' + (f' -p "{parent}";' if i else ";")
+        )
+        prefix += f"|j{i}"
+    deepest = prefix
+    prefix = "|m"
+    lines.append('createNode transform -n "m";')
+    for i in range(repeated):
+        lines.append(f'createNode transform -n "j{i}" -p "{prefix}";')
+        prefix += f"|j{i}"
+    lines += [
+        'createNode transform -n "other";',
+        f'parent -s -nc -r -add "{deepest}" "other";',
+    ]
+    path = tmp_path / "deep.ma"
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+    scene = py_maya.parse(path)
+    last = f"j{depth - 1}"
+    assert scene.node(last).paths == [deepest, f"|other|{last}"]
+    assert scene.nodes[-2].path == prefix
+
+    scene.node("|j0").name = "root"
+    scene.save(tmp_path / "out.ma")
+    saved = py_maya.parse(tmp_path / "out.ma")
+    assert saved.node(last).paths == ["|root" + deepest[3:], f"|other|{last}"]
+
+
 @pytest.mark.parametrize("ext", FORMATS)
 def test_rename_to_same_name_writes_nothing(ext: str, tmp_path: Path) -> None:
     path = SAMPLES / "maya2024" / f"names.{ext}"
