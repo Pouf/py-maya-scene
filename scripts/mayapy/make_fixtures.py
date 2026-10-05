@@ -182,6 +182,14 @@ cache = cmds.createNode(
 set_path(cache, "cacheFileName", "P:/probe/cache.abc")
 save("rename_probe")
 
+# instances: one shape under two transforms
+cmds.file(new=True, force=True)
+hero = cmds.polyCube(name="hero")[0]
+cmds.parent(
+    cmds.instance(hero, name="heroInstance")[0], cmds.group(empty=True, name="copies")
+)
+save("instances")
+
 
 # Maya's own renames of the scenes above: what py_maya's renames must match
 def save_renamed(source, renames, name):
@@ -192,6 +200,9 @@ def save_renamed(source, renames, name):
 
 
 save_renamed("names.mb", [("|grpA", "grpRenamed")], "names_renamed")
+save_renamed(
+    "instances.mb", [("hero", "villain"), ("copies", "doubles")], "instances_renamed"
+)
 save_renamed("names.mb", [("|grpA|cube", "grpB")], "names_clash")
 save_renamed(
     "refedits.mb",
