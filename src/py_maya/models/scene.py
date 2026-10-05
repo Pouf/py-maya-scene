@@ -60,8 +60,20 @@ class Scene:
         self._nodes = [Node(r, self) for r in _storage.nodes()]
         self._by_name: dict[str, list[Node]] | None = None
         self._path_cache: dict[int, str] = {}
+        self._paths_cache: dict[int, list[str]] = {}
+        self._extra_parents: dict[int, list[str]] | None = None
         # externalContentTable rows bound to what they describe, at the first edit
         self._content: tuple[ContentTable, list[_ContentBinding]] | None = None
+
+    def _instance_parents(self) -> dict[int, list[str]]:
+        """Extra parent names of instanced nodes (`parent -add`), by node."""
+        if self._extra_parents is None:
+            self._extra_parents = {}
+            for record in self._storage.instances():
+                child = self._find(record.child, primary=True)
+                if child is not None:
+                    self._extra_parents.setdefault(id(child), []).append(record.parent)
+        return self._extra_parents
 
     def _before_edit(self) -> None:
         """Bind the externalContentTable rows while names and paths are unchanged."""
@@ -122,6 +134,9 @@ class Scene:
         names.setdefault(node.name, []).append(node)
         for stale in moved:
             self._path_cache.pop(id(stale), None)
+            self._paths_cache.pop(id(stale), None)
+        # Instance records name parents: resolve them again
+        self._extra_parents = None
 
     @property
     def path(self) -> Path | None:
@@ -165,13 +180,22 @@ class Scene:
             raise KeyError(f"no node named {name!r}")
         return node
 
-    def _find(self, name: str) -> Node | None:
+    def _find(self, name: str, primary: bool = False) -> Node | None:
+        """The node named `name` (short name or DAG path, any of an instanced
+        node's paths unless `primary`)."""
         short = name.rsplit("|", 1)[-1].lstrip(":")
         candidates = self._names().get(short, [])
-        if name.startswith("|"):
-            candidates = [n for n in candidates if n.path == name]
-        elif "|" in name:
-            candidates = [n for n in candidates if n.path.endswith(f"|{name}")]
+        if "|" in name:
+            suffix = name if name.startswith("|") else f"|{name}"
+            exact = name.startswith("|")
+            candidates = [
+                n
+                for n in candidates
+                if any(
+                    p == name if exact else p.endswith(suffix)
+                    for p in ([n.path] if primary else n.paths)
+                )
+            ]
         if len(candidates) > 1:
             raise ValueError(f"{name!r} matches several nodes")
         return candidates[0] if candidates else None

@@ -12,6 +12,7 @@ from ..binary.scene_chunks import (
     decode_crea,
     decode_file_info,
     decode_includes,
+    decode_instance,
     decode_metadata,
     decode_plugin,
     decode_reference,
@@ -23,6 +24,7 @@ from ..binary.scene_chunks import (
     encode_connection,
     encode_crea,
     encode_includes,
+    encode_instance,
     encode_metadata,
     encode_reference_edits,
     encode_relationship,
@@ -44,6 +46,7 @@ from .base import (
     AttributeRecord,
     AttributeValue,
     ConnectionRecord,
+    InstanceRecord,
     NodeRecord,
     Plugin,
     ReferenceRecord,
@@ -52,8 +55,9 @@ from .base import (
     file_type_for,
 )
 
-# Root groups that are not nodes
-_NOT_NODES = (b"HEAD", b"FRDI", b"FREF")
+# Root groups that are not nodes; PING holds the extra parents of instancing
+_NOT_NODES = (b"HEAD", b"FRDI", b"FREF", b"PING")
+# Chunks in a node group that are not attribute values: addAttr and aliasAttr
 # Chunks in a node group that are not attribute values: addAttr and aliasAttr
 _NOT_VALUES = (b"ATTR", b"ATAL")
 _STRING_TAGS = (b"STR ", b"STR#")
@@ -256,6 +260,27 @@ class MbConnection(ConnectionRecord):
         return encode_text(text) in self._chunk.data
 
 
+class MbInstance(InstanceRecord):
+    """`PRNT`, in a root `PING` group."""
+
+    def __init__(self, chunk: Chunk) -> None:
+        self._chunk = chunk
+
+    @property
+    def child(self) -> str:
+        return decode_instance(self._chunk.data)[1]
+
+    @property
+    def parent(self) -> str:
+        return decode_instance(self._chunk.data)[2]
+
+    def set_names(self, child: str, parent: str) -> None:
+        self._chunk.data = encode_instance(self._chunk.data[0], child, parent)
+
+    def mentions(self, text: str) -> bool:
+        return encode_text(text) in self._chunk.data
+
+
 class MbRelationship(RelationshipRecord):
     def __init__(self, chunk: Chunk) -> None:
         self._chunk = chunk
@@ -293,10 +318,16 @@ class MbScene(SceneStorage):
         self._references: list[ReferenceRecord] = [
             MbReference(_only_chunk(g), self) for g in groups if g.form_type == b"FRDI"
         ]
-        self._nodes: list[NodeRecord] = [
-            MbNode(g, self)
+        node_groups = [
+            g for g in groups if g.tag == b"FOR8" and g.form_type not in _NOT_NODES
+        ]
+        self._nodes: list[NodeRecord] = [MbNode(g, self) for g in node_groups]
+        self._instances = [
+            c
             for g in groups
-            if g.tag == b"FOR8" and g.form_type not in _NOT_NODES
+            if g.form_type == b"PING"
+            for c in g.chunks
+            if isinstance(c, Chunk) and c.tag == b"PRNT"
         ]
         self._links = [
             chunk
@@ -349,6 +380,9 @@ class MbScene(SceneStorage):
 
     def relationships(self) -> list[RelationshipRecord]:
         return [MbRelationship(c) for c in self._links if c.tag == b"RELA"]
+
+    def instances(self) -> list[InstanceRecord]:
+        return [MbInstance(chunk) for chunk in self._instances]
 
     def metadata(self) -> str | None:
         try:

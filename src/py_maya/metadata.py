@@ -25,7 +25,7 @@ from .mel import quote, unquote
 # Maya computes `upathcrc` on the path in the system code page, also in `.mb`
 # files whose text is UTF-8 (measured on Maya 2018 to 2024, code page 1252)
 CODEPAGE = "cp1252"
-_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|\S+')
+_TOKEN = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|\S+')
 _TABLE = "externalContentTable"
 
 

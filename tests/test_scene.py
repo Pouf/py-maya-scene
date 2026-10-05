@@ -115,6 +115,14 @@ def test_deps_fixture(ext: str) -> None:
 
 
 @pytest.mark.parametrize("ext", FORMATS)
+def test_instance_paths(ext: str) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"instances.{ext}")
+    shape = scene.node("heroShape")
+    assert shape.paths == ["|hero|heroShape", "|copies|heroInstance|heroShape"]
+    assert scene.node("|copies|heroInstance|heroShape") is shape
+
+
+@pytest.mark.parametrize("ext", FORMATS)
 def test_refs_fixture(ext: str) -> None:
     scene = py_maya.parse(SAMPLES / "maya2024" / f"refs.{ext}")
     assert [(r.node, r.depth, r.deferred) for r in scene.references] == [

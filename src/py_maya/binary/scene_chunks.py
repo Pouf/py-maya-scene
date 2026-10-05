@@ -190,6 +190,16 @@ def encode_connection(flags: int, source: str, destination: str) -> bytes:
     return bytes((flags,)) + encode_string(source) + encode_string(destination)
 
 
+def decode_instance(data: bytes) -> tuple[int, str, str]:
+    """`PRNT` (`parent -add`): flag byte, instanced node path, extra parent."""
+    child, parent, _ = data[1:].split(b"\x00")
+    return data[0], decode_text(child), decode_text(parent)
+
+
+def encode_instance(flags: int, child: str, parent: str) -> bytes:
+    return bytes((flags,)) + encode_string(child) + encode_string(parent)
+
+
 def decode_relationship(data: bytes) -> tuple[str, str, list[str]]:
     """`RELA`: kind, node, u32 count, then that many plugs."""
     cursor = _Cursor(data)

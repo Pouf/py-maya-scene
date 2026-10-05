@@ -166,6 +166,26 @@ class ConnectionRecord(ABC):
     def mentions(self, text: str) -> bool: ...
 
 
+class InstanceRecord(ABC):
+    """`parent -add`: an extra parent for an existing DAG node (instancing)."""
+
+    @property
+    @abstractmethod
+    def child(self) -> str:
+        """The instanced node, as stored (a DAG path)."""
+
+    @property
+    @abstractmethod
+    def parent(self) -> str:
+        """The extra parent, as stored."""
+
+    @abstractmethod
+    def set_names(self, child: str, parent: str) -> None: ...
+
+    @abstractmethod
+    def mentions(self, text: str) -> bool: ...
+
+
 class RelationshipRecord(ABC):
     """A `relationship` (light linking and the like)."""
 
@@ -218,6 +238,9 @@ class SceneStorage(ABC):
 
     @abstractmethod
     def relationships(self) -> list[RelationshipRecord]: ...
+
+    @abstractmethod
+    def instances(self) -> list[InstanceRecord]: ...
 
     @abstractmethod
     def metadata(self) -> str | None:
