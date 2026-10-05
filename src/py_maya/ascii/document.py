@@ -107,9 +107,47 @@ class Document:
         return self.text.find(text, start, self._ends[index]) != -1
 
     def tokens(self, index: int) -> list[Token]:
-        """Words and string literals of statement `index`, the command first."""
+        """Words and string literals of statement `index`, the command first.
+
+        Maya splits long string literals into MEL concatenations, across
+        lines and in reference edits within parentheses (`("part" + "part")`):
+        such a run is one token, spanning all its parts, whose text is the
+        joined literal.
+        """
         text = self.statement(index)
-        return [Token(m.group(), m.start(), m.end()) for m in _TOKEN.finditer(text)]
+        found = [(m.group(), m.start(), m.end()) for m in _TOKEN.finditer(text)]
+
+        def is_string(position: int) -> bool:
+            return position < len(found) and found[position][0].startswith('"')
+
+        tokens = []
+        position = 0
+        while position < len(found):
+            token, start, end = found[position]
+            opened = token == "(" and is_string(position + 1)
+            if opened or token.startswith('"'):
+                position += opened
+                parts = [found[position][0][1:-1]]
+                end = found[position][2]
+                while (
+                    position + 2 < len(found)
+                    and found[position + 1][0] == "+"
+                    and is_string(position + 2)
+                ):
+                    parts.append(found[position + 2][0][1:-1])
+                    end = found[position + 2][2]
+                    position += 2
+                if (
+                    opened
+                    and position + 1 < len(found)
+                    and found[position + 1][0] == ")"
+                ):
+                    position += 1
+                    end = found[position][2]
+                token = '"' + "".join(parts) + '"'
+            tokens.append(Token(token, start, end))
+            position += 1
+        return tokens
 
     def replace_tokens(self, index: int, replacements: dict[int, str]) -> None:
         """Replace tokens of statement `index` (by token position) with new text."""
