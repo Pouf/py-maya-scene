@@ -8,12 +8,14 @@ from typing import Any
 import pytest
 
 import py_maya
-from py_maya.binary.scene_chunks import decode_metadata
+from py_maya.data.node_types import DEFAULT_NODES
 from py_maya.metadata import ContentTable, path_crc
 from py_maya.models import Dependency, Scene
+from py_maya.storage.base import file_type_for
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
-MB_FILES = sorted(SAMPLES.glob("*/*.mb"))
+SCENE_FILES = sorted(SAMPLES.glob("*/*.m[ab]"))
+FORMATS = ["mb", "ma"]
 
 
 def _truth(path: Path) -> Any:
@@ -29,7 +31,18 @@ def _long_name(scene: Scene, name: str) -> str:
     return node.path if node is not None else name.lstrip(":")
 
 
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+def _save(scene: Scene, tmp_path: Path) -> bytes:
+    assert scene.path is not None
+    target = tmp_path / f"out{scene.path.suffix}"
+    scene.save(target)
+    return target.read_bytes()
+
+
+def _content_rows(scene: Scene) -> list[Any]:
+    return ContentTable(scene._storage.metadata() or "").rows
+
+
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
 def test_nodes_match_maya(path: Path) -> None:
     scene = py_maya.parse(path)
     truth = {n["name"]: n for n in _truth(path)["nodes"]}
@@ -37,19 +50,21 @@ def test_nodes_match_maya(path: Path) -> None:
     assert created
     for node in created:
         assert node.path in truth, node
-        assert (node.type, node.uuid) == (
-            truth[node.path]["type"],
-            truth[node.path]["uuid"],
-        )
+        assert node.type == truth[node.path]["type"]
+        # Opening a `.ma`, Maya keeps its own UUID for the nodes every scene
+        # starts with (lightLinker1, layerManager...); the file still stores one
+        if not (path.suffix == ".ma" and node.name in DEFAULT_NODES):
+            assert node.uuid == truth[node.path]["uuid"], node
 
 
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
 def test_connections_match_maya(path: Path) -> None:
     scene = py_maya.parse(path)
     truth = {
         (_long_name(scene, s.split(".")[0]), _long_name(scene, d.split(".")[0]))
         for s, d in _truth(path)["connections"]
     }
+    assert scene.connections
     for connection in scene.connections:
         pair = (
             _long_name(scene, connection.source.split(".")[0]),
@@ -58,7 +73,7 @@ def test_connections_match_maya(path: Path) -> None:
         assert pair in truth, connection
 
 
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
 def test_references_match_maya(path: Path) -> None:
     scene = py_maya.parse(path)
     # Maya reports duplicate references with a `{n}` copy number the file does not store
@@ -69,7 +84,7 @@ def test_references_match_maya(path: Path) -> None:
     assert sorted((r.node, r.namespace, r.path) for r in scene.references) == truth
 
 
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
 def test_file_paths_match_maya(path: Path) -> None:
     scene = py_maya.parse(path)
     truth = set()
@@ -82,15 +97,14 @@ def test_file_paths_match_maya(path: Path) -> None:
     assert found == truth
 
 
-def test_deps_fixture() -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "deps.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_deps_fixture(ext: str) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"deps.{ext}")
     assert scene.version == "2024"
     assert scene.file_info["product"] == "Maya 2024"
     assert {p.name for p in scene.plugins} == {"AbcImport", "mtoa", "gpuCache"}
-    assert (
-        scene.node("unicodeTex").attr("ftn").value
-        == "P:/projets/d\u00e9mo/textures/\u00e9toile.png"
-    )
+    texture = scene.node("unicodeTex").attr("ftn")
+    assert texture.value == "P:/projets/d\u00e9mo/textures/\u00e9toile.png"
     assert scene.node("transform1").path == "|transform1"
     gpu = scene.node("gpuCache1")
     assert (gpu.type, gpu.path, gpu.is_dag) == (
@@ -100,8 +114,9 @@ def test_deps_fixture() -> None:
     )
 
 
-def test_refs_fixture() -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_refs_fixture(ext: str) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refs.{ext}")
     assert [(r.node, r.depth, r.deferred) for r in scene.references] == [
         ("depsRN", 1, False),
         ("aRN", 1, False),
@@ -120,16 +135,17 @@ def test_refs_fixture() -> None:
     ]
 
 
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
-def test_reference_edits_round_trip(path: Path) -> None:
-    for attribute, edits in py_maya.parse(path).reference_edits():
-        raw = attribute._chunk.data
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
+def test_reference_edits_round_trip(path: Path, tmp_path: Path) -> None:
+    scene = py_maya.parse(path)
+    for attribute, edits in scene.reference_edits():
         attribute.value = edits
-        assert attribute._chunk.data == raw
+    assert _save(scene, tmp_path) == path.read_bytes()
 
 
-def test_reference_edit_kinds() -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "refedits.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_reference_edit_kinds(ext: str) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refedits.{ext}")
     ((_, edits),) = scene.reference_edits()
     (first,), ((node, node_edits),) = edits.sections
     assert first == ("eRN", []) and node == "eRN"
@@ -143,8 +159,19 @@ def test_reference_edit_kinds() -> None:
     assert len(both_referenced.strings) == 6
 
 
-def test_extra_attributes_reach_reference_edits() -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "refedits.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_reference_edits_agree_across_formats(ext: str) -> None:
+    def edits(name: str) -> list[Any]:
+        scene = py_maya.parse(SAMPLES / "maya2024" / name)
+        return [value for _, value in scene.reference_edits()]
+
+    for name in ("refs", "refedits"):
+        assert edits(f"{name}.ma") == edits(f"{name}.mb")
+
+
+@pytest.mark.parametrize("ext", FORMATS)
+def test_extra_attributes_reach_reference_edits(ext: str) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refedits.{ext}")
     assert not [d for d in scene.dependencies() if d.kind == "reference edit"]
     found = scene.dependencies(extra={"transform": ["note"]})
     assert [d for d in found if d.kind == "reference edit"] == [
@@ -152,77 +179,103 @@ def test_extra_attributes_reach_reference_edits() -> None:
     ]
 
 
-def test_remap_reference_edit(tmp_path: Path) -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
-    assert (
-        scene.remap_paths(
-            lambda p: p.replace("P:/edited", "Q:/a\\b") if "edited" in p else None
-        )
-        == 1
+@pytest.mark.parametrize("ext", FORMATS)
+def test_remap_reference_edit(ext: str, tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refs.{ext}")
+    changed = scene.remap_paths(
+        lambda p: p.replace("P:/edited", "Q:/a\\b") if "edited" in p else None
     )
-    _save(scene, tmp_path)
-    saved = py_maya.parse(tmp_path / "out.mb")
+    assert changed == 1
+    data = _save(scene, tmp_path)
+    saved = py_maya.parse(tmp_path / f"out.{ext}")
     assert [d.path for d in saved.dependencies() if d.kind == "reference edit"] == [
         "Q:/a\\b/in/parent.exr"
     ]
-    assert b'"Q:/a\\\\b/in/parent.exr"' in (tmp_path / "out.mb").read_bytes()
+    # MEL escaping: once in the edit arguments, once more as a `.ma` string
+    escaped = b"Q:/a\\\\b" if ext == "mb" else b"Q:/a\\\\\\\\b"
+    assert escaped + b"/in/parent.exr" in data
 
 
-def _save(scene: Scene, tmp_path: Path) -> bytes:
-    target = tmp_path / "out.mb"
-    scene.save(target)
-    return target.read_bytes()
-
-
-@pytest.mark.parametrize("path", MB_FILES, ids=_id)
+@pytest.mark.parametrize("path", SCENE_FILES, ids=_id)
 def test_noop_remap_is_byte_identical(path: Path, tmp_path: Path) -> None:
     scene = py_maya.parse(path)
     assert scene.remap_paths(lambda p: None) == 0
     assert _save(scene, tmp_path) == path.read_bytes()
 
 
-def test_remap_paths(tmp_path: Path) -> None:
-    path = SAMPLES / "maya2024" / "deps.mb"
-    scene = py_maya.parse(path)
+@pytest.mark.parametrize("ext", FORMATS)
+def test_remap_paths(ext: str, tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"deps.{ext}")
     before = scene.dependencies()
     changed = scene.remap_paths(
         lambda p: "Q:/new/" + p[3:] if p.startswith("P:/") else None
     )
     assert changed == sum(d.path.startswith("P:/") for d in before)
     _save(scene, tmp_path)
-    after = py_maya.parse(tmp_path / "out.mb").dependencies()
+    saved = py_maya.parse(tmp_path / f"out.{ext}")
     expected = [
         d._replace(path="Q:/new/" + d.path[3:]) if d.path.startswith("P:/") else d
         for d in before
     ]
-    assert after == expected
+    assert saved.dependencies() == expected
     # The externalContentTable follows, CRC included
-    data = (tmp_path / "out.mb").read_bytes()
-    smtd = data[data.rfind(b"SMTD") + 16 :]
-    rows = ContentTable(
-        decode_metadata(smtd[: smtd.index(b"endAssociations\n") + 17])
-    ).rows
-    texture_rows = [r for r in rows if r.attribute]
+    texture_rows = [r for r in _content_rows(saved) if r.attribute]
     assert texture_rows and all(r.path.startswith("Q:/new/") for r in texture_rows)
     assert all(int(r._tokens[3]) == path_crc(r.path) for r in texture_rows)
 
 
-def test_reference_path_keeps_fref_frdi_and_trailer_in_step(tmp_path: Path) -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_reference_path_keeps_both_statements_in_step(ext: str, tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refs.{ext}")
     a_ref = next(r for r in scene.references if r.node == "aRN")
     a_ref.path = "Q:/elsewhere/ref_child.mb"
-    _save(scene, tmp_path)
-    data = (tmp_path / "out.mb").read_bytes()
-    saved = py_maya.parse(tmp_path / "out.mb")
+    data = _save(scene, tmp_path)
+    saved = py_maya.parse(tmp_path / f"out.{ext}")
     paths = {r.node: r.path for r in saved.references + saved.nested_references}
     assert paths["aRN"] == "Q:/elsewhere/ref_child.mb"
     assert paths["bRN"] == paths["deps:childRN"] == "$PY_MAYA_SAMPLES/ref_child.mb"
-    assert data.count(b"Q:/elsewhere/ref_child.mb\x00") == 2  # FRDI and FREF
+    # `.mb`: FRDI, FREF, trailer INCL; `.ma`: `file -rdi`, `file -r`; plus the table row
+    assert data.count(b"Q:/elsewhere/ref_child.mb") == (4 if ext == "mb" else 3)
+
+
+@pytest.mark.parametrize("ext", FORMATS)
+def test_reference_file_type_follows_extension(ext: str, tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"refs.{ext}")
+    a_ref = next(r for r in scene.references if r.node == "aRN")
+    assert a_ref.file_type == "mayaBinary"
+    a_ref.path = "$PY_MAYA_SAMPLES/ref_child.ma"
+    assert a_ref.file_type == "mayaAscii"
+    data = _save(scene, tmp_path)
+    saved = py_maya.parse(tmp_path / f"out.{ext}")
+    types = {r.node: r.file_type for r in saved.references}
+    assert types == {
+        "depsRN": "mayaBinary",
+        "aRN": "mayaAscii",
+        "bRN": "mayaBinary",
+        "lateRN": "mayaAscii",
+    }
+    # Both statements of the reference (`FRDI`/`FREF`, `file -rdi`/`file -r`)
+    assert data.count(b"mayaAscii") == 4
+
+
+def test_file_type_for() -> None:
+    assert file_type_for("P:/a.MA", "mayaBinary") == "mayaAscii"
+    assert file_type_for("P:/a.mb", "mayaAscii") == "mayaBinary"
+    assert file_type_for("P:/a.abc", "mayaBinary") == "mayaBinary"
+    assert file_type_for("P:/a.ma", "Alembic") == "Alembic"
+
+
+def test_mb_trailer_follows_reference_paths(tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
+    next(
+        r for r in scene.references if r.node == "aRN"
+    ).path = "Q:/elsewhere/ref_child.mb"
+    data = _save(scene, tmp_path)
     # Trailer INCL lists top-level references in FREF order: deps, a, b, late
     assert b"/deps.mb(Q:/elsewhere/ref_child.mb($PY_MAYA_SAMPLES/ref_child.mb(" in data
 
 
-def test_trailer_offset_follows_resized_trailer(tmp_path: Path) -> None:
+def test_mb_trailer_offset_follows_resized_trailer(tmp_path: Path) -> None:
     scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
     scene.references[0].path = "Q:/a/much/longer/path/than/before/deps.mb"
     data = _save(scene, tmp_path)
@@ -233,10 +286,11 @@ def test_trailer_offset_follows_resized_trailer(tmp_path: Path) -> None:
     assert int.from_bytes(data[bcsz + 16 : bcsz + 20], "big") == bcsz - trailer
 
 
-def test_save_refuses_to_overwrite(tmp_path: Path) -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "ref_child.mb")
+@pytest.mark.parametrize("ext", FORMATS)
+def test_save_refuses_to_overwrite(ext: str, tmp_path: Path) -> None:
+    scene = py_maya.parse(SAMPLES / "maya2024" / f"ref_child.{ext}")
     _save(scene, tmp_path)
     with pytest.raises(FileExistsError):
-        scene.save(tmp_path / "out.mb")
+        scene.save(tmp_path / f"out.{ext}")
     scene.save_in_place()
-    assert scene.path == tmp_path / "out.mb"
+    assert scene.path == tmp_path / f"out.{ext}"

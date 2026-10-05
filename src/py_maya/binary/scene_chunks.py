@@ -99,6 +99,19 @@ def split_reference(data: bytes, with_depth: bool) -> tuple[bytes, str, bytes]:
     return data[:start], decode_text(data[start:nul]), data[nul:]
 
 
+def reference_file_type(data: bytes) -> str:
+    """File type of a `FREF`/`FRDI` payload (`mayaBinary`, `mayaAscii`): the
+    last string, followed by fixed NUL bytes (3 in `FRDI`, 12 in `FREF`)."""
+    stripped = data.rstrip(b"\x00")
+    return decode_text(stripped[stripped.rfind(b"\x00") + 1 :])
+
+
+def replace_reference_file_type(data: bytes, file_type: str) -> bytes:
+    stripped = data.rstrip(b"\x00")
+    start = stripped.rfind(b"\x00") + 1
+    return data[:start] + encode_text(file_type) + data[len(stripped) :]
+
+
 class ReferenceFields(NamedTuple):
     """Fields of a `FREF`/`FRDI` payload."""
 

@@ -6,20 +6,13 @@ import re
 from functools import partial
 from typing import TYPE_CHECKING, List, Union
 
-from ..binary import Chunk, GroupChunk
-from ..binary.scene_chunks import (
-    ReferenceEdits,
-    decode_connection,
-    decode_relationship,
-    encode_connection,
-    encode_relationship,
-    encode_text,
-)
+from ..binary.scene_chunks import ReferenceEdits
 from ..mel import string_setattr_arguments, string_setattr_value
 
 if TYPE_CHECKING:
     from typing import Callable
 
+    from ..storage.base import ConnectionRecord, RelationshipRecord
     from .node import Attribute, Node
     from .scene import Scene
 
@@ -154,7 +147,6 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
     # Any string naming an affected node contains the old or the new name
     # (a path to a descendant contains the old one): skip the others undecoded
     needles = (old_name, new_name)
-    byte_needles = tuple(encode_text(n) for n in needles)
 
     # Compute every new value against the current names, then write them all
     writes: list[Callable[[], None]] = []
@@ -163,14 +155,14 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
         if parent_name is not None and any(n in parent_name for n in needles):
             new_parent = rewrite_node(parent_name)
             if new_parent != parent_name:
-                writes.append(partial(other._store_parent_name, new_parent))
-    for chunk in _connection_chunks(scene):
-        if any(n in chunk.data for n in byte_needles):
-            data = _rewrite_connection(
-                chunk.tag, chunk.data, rewrite_node, rewrite_plug
-            )
-            if data != chunk.data:
-                writes.append(partial(_store_data, chunk, data))
+                writes.append(partial(other._record.set_parent_name, new_parent))
+    storage = scene._storage
+    for connection in storage.connections():
+        if any(connection.mentions(n) for n in needles):
+            writes += _rewrite_connection(connection, rewrite_plug)
+    for relationship in storage.relationships():
+        if any(relationship.mentions(n) for n in needles):
+            writes += _rewrite_relationship(relationship, rewrite_node, rewrite_plug)
     for attribute, edits in scene.reference_edits():
         changed = _rewrite_edits(edits, edit_node, edit_plug)
         if in_strings:
@@ -181,7 +173,7 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
         for other in scene._nodes:
             mel = _MEL_ATTRIBUTES.get(other.type, ())
             for attribute in other._string_attributes():
-                if not any(n in attribute._chunk.data for n in byte_needles):
+                if not any(attribute._record.mentions(n) for n in needles):
                     continue
                 value = attribute.value
                 new_value: StringValue
@@ -199,7 +191,7 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
                     continue
                 if new_value != value:
                     writes.append(partial(_store_value, attribute, new_value))
-    writes.append(partial(node._store_name, new_name))
+    writes.append(partial(node._record.set_name, new_name))
     for write in writes:
         write()
     scene._renamed(node, old_name, moved)
@@ -224,28 +216,24 @@ def _check_free(names: dict[str, list[Node]], node: Node, new_name: str) -> None
             raise ValueError(f"{new_name!r} already names a sibling of {node.path}")
 
 
-def _connection_chunks(scene: Scene) -> list[Chunk]:
-    chunks = []
-    for group in scene._connection_groups:
-        assert isinstance(group, GroupChunk)  # CONS holds CONN groups
-        chunks += [
-            c
-            for c in group.chunks
-            if isinstance(c, Chunk) and c.tag in (b"CWFL", b"RELA")
-        ]
-    return chunks
-
-
 def _rewrite_connection(
-    tag: bytes, data: bytes, rewrite_node: Rewrite, rewrite_plug: Rewrite
-) -> bytes:
-    if tag == b"CWFL":
-        flags, source, destination = decode_connection(data)
-        return encode_connection(flags, rewrite_plug(source), rewrite_plug(destination))
-    kind, owner, plugs = decode_relationship(data)
-    return encode_relationship(
-        kind, rewrite_node(owner), [rewrite_plug(p) for p in plugs]
-    )
+    connection: ConnectionRecord, rewrite_plug: Rewrite
+) -> list[Callable[[], None]]:
+    source, destination = connection.source, connection.destination
+    new_source, new_destination = rewrite_plug(source), rewrite_plug(destination)
+    if (new_source, new_destination) == (source, destination):
+        return []
+    return [partial(connection.set_plugs, new_source, new_destination)]
+
+
+def _rewrite_relationship(
+    relationship: RelationshipRecord, rewrite_node: Rewrite, rewrite_plug: Rewrite
+) -> list[Callable[[], None]]:
+    owner, plugs = relationship.node, relationship.plugs
+    new_owner, new_plugs = rewrite_node(owner), [rewrite_plug(p) for p in plugs]
+    if (new_owner, new_plugs) == (owner, plugs):
+        return []
+    return [partial(relationship.set_names, new_owner, new_plugs)]
 
 
 def _rewrite_edits(
@@ -285,10 +273,6 @@ def _rewrite_edit_strings(edits: ReferenceEdits, rewrite: Rewrite) -> bool:
                 edit.strings[2] = string_setattr_arguments(new)
                 changed = True
     return changed
-
-
-def _store_data(chunk: Chunk, data: bytes) -> None:
-    chunk.data = data
 
 
 def _store_value(attribute: Attribute, value: StringValue) -> None:

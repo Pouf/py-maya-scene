@@ -1,33 +1,14 @@
-"""A Maya scene, backed by its `.mb` chunk tree."""
+"""A Maya scene, whatever its format."""
 
 from __future__ import annotations
 
-import io
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Optional, Tuple, Union
 
-from ..binary import Chunk, GroupChunk, extent, write_mb
-from ..binary.scene_chunks import (
-    Plugin,
-    ReferenceEdit,
-    ReferenceEdits,
-    decode_connection,
-    decode_file_info,
-    decode_includes,
-    decode_metadata,
-    decode_plugin,
-    decode_reference,
-    decode_text,
-    encode_includes,
-    encode_metadata,
-    encode_text,
-    encode_u32,
-    split_reference,
-)
-from ..data.node_types import TYPE_NAMES
+from ..binary.scene_chunks import ReferenceEdit, ReferenceEdits
 from ..mel import string_setattr_arguments, string_setattr_value
-from ..metadata import CODEPAGE, ContentRow, ContentTable
+from ..metadata import ContentRow, ContentTable
 from ..resolvers.file_attributes import (
     file_attribute_long_names,
     file_attribute_names,
@@ -40,10 +21,9 @@ from .reference import Reference
 if TYPE_CHECKING:
     from typing import Callable, Iterable, Mapping
 
-    ExtraAttributes = Mapping[str, Iterable[str]]
+    from ..storage.base import Plugin, SceneStorage
 
-# Root groups that are not nodes
-_NOT_NODES = (b"HEAD", b"FRDI", b"FREF")
+    ExtraAttributes = Mapping[str, Iterable[str]]
 
 
 class Connection(NamedTuple):
@@ -71,48 +51,25 @@ class Dependency(NamedTuple):
 
 
 class Scene:
-    """A Maya scene file."""
+    """A Maya scene file (`.mb` or `.ma`)."""
 
-    def __init__(self, _root: GroupChunk, path: Path | None) -> None:
-        self._root = _root
+    def __init__(self, _storage: SceneStorage, path: Path | None) -> None:
+        self._storage = _storage
         self._path = path
-        groups = [c for c in _root.chunks if isinstance(c, GroupChunk)]
-        heads = [g for g in groups if g.form_type == b"HEAD"]
-        self._header, self._trailer = heads[0], heads[-1]
-        self._frefs = [_only_chunk(g) for g in groups if g.form_type == b"FREF"]
-        self._all_references = [
-            Reference(_only_chunk(g), self) for g in groups if g.form_type == b"FRDI"
-        ]
-        self._nodes = [
-            Node(g, self)
-            for g in groups
-            if g.tag == b"FOR8" and g.form_type not in _NOT_NODES
-        ]
-        self._connection_groups = [
-            conn for g in groups if g.form_type == b"CONS" for conn in g.chunks
-        ]
-        self._plugin_types: dict[int, str] = {}
-        for plugin in self.plugins:
-            self._plugin_types.update(plugin.node_types)
+        self._all_references = [Reference(r, self) for r in _storage.references()]
+        self._nodes = [Node(r, self) for r in _storage.nodes()]
         self._by_name: dict[str, list[Node]] | None = None
         self._path_cache: dict[int, str] = {}
         # externalContentTable rows bound to what they describe, at the first edit
-        self._content: tuple[Chunk, ContentTable, list[_ContentBinding]] | None = None
+        self._content: tuple[ContentTable, list[_ContentBinding]] | None = None
 
     def _before_edit(self) -> None:
         """Bind the externalContentTable rows while names and paths are unchanged."""
         if self._content is not None:
             return
-        chunk = next(
-            (
-                c
-                for c in self._trailer.chunks
-                if isinstance(c, Chunk) and c.tag == b"SMTD"
-            ),
-            None,
-        )
+        text = self._storage.metadata()
+        table = ContentTable(text or "")
         bindings: list[_ContentBinding] = []
-        table = ContentTable(decode_metadata(chunk.data) if chunk is not None else "")
         references = {r.node: r for r in self.references}
         for row in table.rows:
             if not row.attribute:
@@ -128,13 +85,12 @@ class Scene:
             for attribute in node._string_attributes():
                 if attribute.name == short:
                     bindings.append((row, node, attribute))
-        if chunk is not None:
-            self._content = (chunk, table, bindings)
+        self._content = (table, bindings)
 
     def _sync_content_table(self) -> None:
         if self._content is None:
             return
-        chunk, table, bindings = self._content
+        table, bindings = self._content
         changed = False
         for row, owner, attribute in bindings:
             if attribute is None:
@@ -144,9 +100,11 @@ class Scene:
                 if not isinstance(value, str):
                     continue
                 node_name, path = owner.path, value
-            changed |= row.update(node_name, path, _resolved(path), CODEPAGE)
+            changed |= row.update(
+                node_name, path, _resolved(path), self._storage.codepage
+            )
         if changed:
-            chunk.data = encode_metadata(table.text)
+            self._storage.set_metadata(table.text)
 
     def _names(self) -> dict[str, list[Node]]:
         """Nodes by name, built once and kept up to date by renames."""
@@ -170,23 +128,20 @@ class Scene:
         """File the scene was parsed from or last saved to."""
         return self._path
 
-    def _header_chunks(self, tag: bytes) -> list[Chunk]:
-        return [c for c in self._header.chunks if isinstance(c, Chunk) and c.tag == tag]
-
     @property
     def version(self) -> str:
         """Maya version that saved the file (`2022`, `2018ff09` for Maya 2019)."""
-        return decode_text(self._header_chunks(b"VERS")[0].data)
+        return self._storage.version
 
     @property
     def file_info(self) -> dict[str, str]:
         """`fileInfo` entries."""
-        return dict(decode_file_info(c.data) for c in self._header_chunks(b"FINF"))
+        return self._storage.file_info
 
     @property
     def plugins(self) -> list[Plugin]:
-        """Required plugins (`requires`), with the node types they provide."""
-        return [decode_plugin(c.data) for c in self._header_chunks(b"PLUG")]
+        """Required plugins (`requires`), with the node types used from them."""
+        return self._storage.plugins
 
     @property
     def references(self) -> list[Reference]:
@@ -221,21 +176,13 @@ class Scene:
             raise ValueError(f"{name!r} matches several nodes")
         return candidates[0] if candidates else None
 
-    def _type_name(self, type_id: int) -> str:
-        name = self._plugin_types.get(type_id) or TYPE_NAMES.get(type_id)
-        return name if name is not None else f"0x{type_id:08X}"
-
     @property
     def connections(self) -> list[Connection]:
         """`connectAttr` statements, in file order."""
-        connections = []
-        for group in self._connection_groups:
-            assert isinstance(group, GroupChunk)  # CONS holds CONN groups
-            for chunk in group.chunks:
-                if isinstance(chunk, Chunk) and chunk.tag == b"CWFL":
-                    flags, source, destination = decode_connection(chunk.data)
-                    connections.append(Connection(source, destination, bool(flags & 1)))
-        return connections
+        return [
+            Connection(r.source, r.destination, r.next_available)
+            for r in self._storage.connections()
+        ]
 
     def file_attributes(self, extra: ExtraAttributes | None = None) -> list[Attribute]:
         """Stored string values of the attributes that hold file paths.
@@ -256,7 +203,7 @@ class Scene:
         """The edits each reference node records, with the attribute holding them."""
         found = []
         for node in self._nodes:
-            if node._group.form_type == b"REFN":
+            if node.type == "reference":
                 for attribute in node.attributes:
                     value = attribute.value if attribute.type == "REFE" else None
                     if isinstance(value, ReferenceEdits):
@@ -346,43 +293,11 @@ class Scene:
             attribute.value = edits
         return changed
 
-    def _set_reference_path(self, reference: Reference, value: str) -> None:
-        self._before_edit()
-        old = reference.path
-        _store_reference_path(reference._chunk, True, value)
-        if reference.depth != 1:
-            return
-        nodes = [decode_reference(c.data, False).node for c in self._frefs]
-        index = nodes.index(reference.node)
-        _store_reference_path(self._frefs[index], False, value)
-        include = self._trailer_chunk(b"INCL")
-        paths = decode_includes(include.data)
-        # The trailer lists the top-level references in FREF order; leave it
-        # alone if a file ever breaks that rule rather than guess.
-        if index < len(paths) and paths[index] == old:
-            paths[index] = value
-            include.data = encode_includes(paths)
-
-    def _trailer_chunk(self, tag: bytes) -> Chunk:
-        for chunk in self._trailer.chunks:
-            if isinstance(chunk, Chunk) and chunk.tag == tag:
-                return chunk
-        raise KeyError(f"no {tag!r} in the trailer")
-
-    def _update_trailer_offset(self) -> None:
-        # BCSZ stores the distance from the start of the trailer group to itself
-        offset = 16 + 4
-        for chunk in self._trailer.chunks:
-            if isinstance(chunk, Chunk) and chunk.tag == b"BCSZ":
-                chunk.data = encode_u32(offset)
-                return
-            offset += extent(chunk)
-
     def save(self, path: str | Path) -> None:
         """Save to a new file; refuses to overwrite one (`FileExistsError`).
 
         The write is atomic: bytes go to a temporary sibling file which then
-        replaces the target.
+        replaces the target. The format stays the one the scene was parsed from.
         """
         target = Path(path)
         if target.exists():
@@ -397,27 +312,13 @@ class Scene:
 
     def _write(self, target: Path) -> None:
         self._sync_content_table()
-        self._update_trailer_offset()
-        buffer = io.BytesIO()
-        write_mb(buffer, self._root)
         temporary = target.with_name(target.name + ".tmp")
-        temporary.write_bytes(buffer.getvalue())
+        temporary.write_bytes(self._storage.to_bytes())
         os.replace(temporary, target)
         self._path = target
 
     def __repr__(self) -> str:
         return f"Scene({self._path}, Maya {self.version}, {len(self._nodes)} nodes)"
-
-
-def _only_chunk(group: GroupChunk) -> Chunk:
-    chunk = group.chunks[0]
-    assert isinstance(chunk, Chunk)  # FREF and FRDI groups hold one data chunk
-    return chunk
-
-
-def _store_reference_path(chunk: Chunk, with_depth: bool, value: str) -> None:
-    prefix, _, rest = split_reference(chunk.data, with_depth)
-    chunk.data = prefix + encode_text(value) + rest
 
 
 def _remapped(remap: Callable[[str], str | None], path: str) -> str:
