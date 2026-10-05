@@ -294,6 +294,62 @@ def test_mb_trailer_offset_follows_resized_trailer(tmp_path: Path) -> None:
     assert int.from_bytes(data[bcsz + 16 : bcsz + 20], "big") == bcsz - trailer
 
 
+# Maya writes short flags; some production files, written by scripts, use
+# long ones, with Windows line ends
+LONG_FLAGS = (
+    b"//Maya ASCII 2022 scene\r\n"
+    b"//Codeset: 1252\r\n"
+    b'file -referenceDepthInfo 1 -namespace "ref" -deferReference 1 -referenceNode "refRN"'
+    b' -type "mayaAscii" "C:/a/ref.ma";\r\n'
+    b'file -reference -namespace "ref" -deferReference 1 -referenceNode "refRN"'
+    b' -type "mayaAscii"\r\n\t\t "C:/a/ref.ma";\r\n'
+    b'requires maya "2022";\r\n'
+    b'requires -nodeType "pgYetiMaya" "pgYetiMaya" "4.0";\r\n'
+    b'createNode transform -name "ALL";\r\n'
+    b'\trename -uuid "11111111-2222-3333-4444-555555555555";\r\n'
+    b'createNode transform -name "geo" -parent "ALL";\r\n'
+    b'createNode mesh -name "geoShape" -parent "geo";\r\n'
+    b'createNode transform -name "other";\r\n'
+    b"select -noExpand :time1;\r\n"
+    b'parent -shape -noConnections -relative -addObject "geoShape" "other";\r\n'
+    b'connectAttr "ALL.tx" "other.tx" -nextAvailable;\r\n'
+    b"// End of long_flags.ma\r\n"
+)
+
+
+def test_long_flags(tmp_path: Path) -> None:
+    path = tmp_path / "long_flags.ma"
+    path.write_bytes(LONG_FLAGS)
+    scene = py_maya.parse(path)
+    assert scene._storage.to_bytes() == LONG_FLAGS
+    assert [n.path for n in scene.nodes] == [
+        "|ALL",
+        "|ALL|geo",
+        "|ALL|geo|geoShape",
+        "|other",
+        "time1",
+    ]
+    assert scene.node("ALL").uuid == "11111111-2222-3333-4444-555555555555"
+    assert scene.node("time1").is_default
+    assert scene.node("geoShape").paths == ["|ALL|geo|geoShape", "|other|geoShape"]
+    assert scene.plugins[0].node_types == ["pgYetiMaya"]
+    assert scene.connections[0].next_available
+    (reference,) = scene.references
+    assert (reference.namespace, reference.node, reference.deferred) == (
+        "ref",
+        "refRN",
+        True,
+    )
+    assert reference.file_type == "mayaAscii"
+
+    scene.node("ALL").name = "ROOT"
+    reference.path = "C:/b/ref.mb"
+    data = _save(scene, tmp_path)
+    assert b'createNode transform -name "geo" -parent "ROOT";\r\n' in data
+    assert data.count(b'-type "mayaBinary"') == 2
+    assert data.count(b'"C:/b/ref.mb"') == 2
+
+
 @pytest.mark.parametrize("ext", FORMATS)
 def test_save_refuses_to_overwrite(ext: str, tmp_path: Path) -> None:
     scene = py_maya.parse(SAMPLES / "maya2024" / f"ref_child.{ext}")

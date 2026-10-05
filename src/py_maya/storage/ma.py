@@ -32,12 +32,42 @@ _VALUE_TYPES = {"string": "STR", "stringArray": "STR#", "dataReferenceEdits": "R
 _EDIT_STRINGS = {0: 3, 1: 4, 2: 3, 3: 3, 4: 3, 8: 2, 9: 2}
 
 
+# Long spellings of the flags read here, for the commands that read them:
+# Maya writes short flags, but scripts that write `.ma` files may not
+# (`createNode transform -name "ALL"`)
+_LONG_FLAGS = {
+    "-n": "-name",
+    "-p": "-parent",
+    "-uid": "-uuid",
+    "-r": "-reference",
+    "-rdi": "-referenceDepthInfo",
+    "-ns": "-namespace",
+    "-dr": "-deferReference",
+    "-rfn": "-referenceNode",
+    "-typ": "-type",
+    "-na": "-nextAvailable",
+    "-ne": "-noExpand",
+    "-add": "-addObject",
+    "-nt": "-nodeType",
+    "-v": "-value",
+}
+
+
+def _is_flag(token: Token, flag: str) -> bool:
+    """Whether `token` is `flag`, in its short or long spelling."""
+    return token.text == flag or token.text == _LONG_FLAGS[flag]
+
+
 def _flag_value(tokens: list[Token], flag: str) -> int | None:
     """Position of the token after `flag`, or None."""
     for position, token in enumerate(tokens[:-1]):
-        if token.text == flag:
+        if _is_flag(token, flag):
             return position + 1
     return None
+
+
+def _has_flag(document: Document, index: int, flag: str) -> bool:
+    return any(_is_flag(t, flag) for t in document.tokens(index))
 
 
 def _read(document: Document, token: str) -> str:
@@ -72,7 +102,7 @@ class MaAttribute(AttributeRecord):
     @property
     def type(self) -> str:
         tokens = self._tokens()
-        position = _flag_value(tokens, "-type")
+        position = _flag_value(tokens, "-typ")
         if position is None:
             return ""
         value_type = _read(self._document, tokens[position].text)
@@ -80,7 +110,7 @@ class MaAttribute(AttributeRecord):
 
     def get_value(self) -> AttributeValue:
         tokens = self._tokens()
-        position = _flag_value(tokens, "-type")
+        position = _flag_value(tokens, "-typ")
         value_type = self.type
         if position is None:
             raise NotImplementedError("numeric values are not decoded yet")
@@ -98,7 +128,7 @@ class MaAttribute(AttributeRecord):
 
     def set_value(self, value: AttributeValue) -> None:
         tokens = self._tokens()
-        position = _flag_value(tokens, "-type")
+        position = _flag_value(tokens, "-typ")
         value_type = self.type
         if value_type == "STR" and isinstance(value, str) and position is not None:
             self._document.replace_tokens(
@@ -406,7 +436,7 @@ class MaConnection(ConnectionRecord):
 
     @property
     def next_available(self) -> bool:
-        return any(t.text == "-na" for t in self._document.tokens(self._index))
+        return _has_flag(self._document, self._index, "-na")
 
     def set_plugs(self, source: str, destination: str) -> None:
         first, second = self._strings()
@@ -518,19 +548,19 @@ class MaScene(SceneStorage):
                 self._nodes.append(MaNode(document, node_start, index, self))
                 node_start = None
             if command == "createNode" or (
-                command == "select" and document.contains(index, "-ne")
+                command == "select" and _has_flag(document, index, "-ne")
             ):
                 node_start = index
             elif command == "file":
-                if document.contains(index, "-rdi"):
+                if _has_flag(document, index, "-rdi"):
                     self._references.append(MaReference(document, index, self))
-                elif document.contains(index, "-r "):
+                elif _has_flag(document, index, "-r"):
                     self._top_references.append(index)
             elif command == "connectAttr":
                 self._connections.append(index)
             elif command == "relationship":
                 self._relationships.append(index)
-            elif command == "parent" and document.contains(index, "-add"):
+            elif command == "parent" and _has_flag(document, index, "-add"):
                 self._instances.append(index)
             elif command == "fileInfo":
                 self._file_info.append(index)
@@ -578,7 +608,7 @@ class MaScene(SceneStorage):
             node_types = [
                 _read(self._document, tokens[i + 1].text)
                 for i, t in enumerate(tokens[:-1])
-                if t.text == "-nodeType"
+                if _is_flag(t, "-nt")
             ]
             plugins.append(
                 Plugin(
