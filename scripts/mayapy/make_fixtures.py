@@ -182,6 +182,17 @@ cache = cmds.createNode(
 set_path(cache, "cacheFileName", "P:/probe/cache.abc")
 save("rename_probe")
 
+# longstrings: strings long enough for Maya to split them in .ma
+cmds.file(new=True, force=True)
+cmds.file("$PY_MAYA_SAMPLES/ref_child.mb", reference=True, namespace="l")
+long_text = "P:/" + "/".join("folder%03d" % i for i in range(400)) + "/long.exr"
+note = cmds.createNode("transform", name="noteHolder")
+cmds.addAttr(note, longName="longNote", dataType="string")
+set_path(note, "longNote", long_text)
+cmds.addAttr("l:refCube", longName="longNote", dataType="string")
+set_path("l:refCube", "longNote", long_text)
+save("longstrings")
+
 # instances: one shape under two transforms
 cmds.file(new=True, force=True)
 hero = cmds.polyCube(name="hero")[0]
