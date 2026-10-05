@@ -225,6 +225,12 @@ byte for byte; the other 5 hold `.mb` chunks partway through.
   files). Edit arguments are MEL inside a MEL string, so escaped twice. Maya
   2018 to 2022 write the node of an addAttr edit as a bare word
   (`1 |grp|ns:node "note" "note" ...`).
+- Long string literals are split into MEL concatenations across lines:
+  `"part"` then `+ "part"` on the next line, and inside reference edits
+  within parentheses, `("part" + "part")`. A reader must join them; a single
+  long literal is just as valid when writing.
+- `parent -s -nc -r -add "child" "parent"` (also spelled with long flags,
+  `-shape -noConnections -relative -addObject`) adds a parent: instancing.
 - `applyMetadata -fmt "raw" -v "<text>"` holds the externalContentTable text.
 - Opening a `.ma`, Maya keeps its own node (and UUID) for the nodes every
   scene starts with (`lightLinker1`, `layerManager`, `renderLayerManager`),
