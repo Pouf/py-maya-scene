@@ -145,11 +145,39 @@ class Node:
             path = cache[id(self)] = self._compute_path()
         return path
 
+    @property
+    def paths(self) -> list[str]:
+        """Every DAG path of the node, `path` first: one per parent (instancing
+        adds parents), times the paths of each parent."""
+        cache = self.scene._paths_cache
+        paths = cache.get(id(self))
+        if paths is None:
+            paths = cache[id(self)] = self._compute_paths()
+        return paths
+
+    def _compute_paths(self) -> list[str]:
+        parent_names = [] if self.parent_name is None else [self.parent_name]
+        parent_names += self.scene._instance_parents().get(id(self), [])
+        if not parent_names:
+            return [self.path]
+        paths = []
+        for parent_name in parent_names:
+            parent = self.scene._find(parent_name)
+            if parent is None:
+                prefix = (
+                    parent_name if parent_name.startswith("|") else f"|{parent_name}"
+                )
+                paths.append(f"{prefix}|{self.name}")
+            else:
+                paths += [f"{p}|{self.name}" for p in parent.paths]
+        return paths
+
     def _compute_path(self) -> str:
         parent_name = self.parent_name
         if parent_name is None:
             return f"|{self.name}" if self.is_dag else self.name
-        parent = self.scene._find(parent_name)
+        # Primary paths only: instance parents are resolved from primary paths
+        parent = self.scene._find(parent_name, primary=True)
         if parent is not None:
             return f"{parent.path}|{self.name}"
         # Parent outside this file (a referenced node): the best known path

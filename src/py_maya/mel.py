@@ -6,7 +6,7 @@ import re
 
 _ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}
 _UNESCAPES = {v[1]: k for k, v in _ESCAPES.items()}
-_LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
+_LITERAL = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"', re.S)
 
 
 def quote(text: str) -> str:
@@ -27,7 +27,7 @@ def unquote(literal: str) -> str:
     )
 
 
-_STRING_SETATTR = re.compile(r' -type "string" ("(?:[^"\\]|\\.)*")', re.S)
+_STRING_SETATTR = re.compile(r' -type "string" ("[^"\\]*(?:\\.[^"\\]*)*")', re.S)
 
 
 def string_setattr_value(arguments: str) -> str | None:

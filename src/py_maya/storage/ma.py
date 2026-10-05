@@ -15,6 +15,7 @@ from .base import (
     AttributeRecord,
     AttributeValue,
     ConnectionRecord,
+    InstanceRecord,
     NodeRecord,
     Plugin,
     ReferenceRecord,
@@ -39,6 +40,16 @@ def _flag_value(tokens: list[Token], flag: str) -> int | None:
     return None
 
 
+def _read(document: Document, token: str) -> str:
+    """The text of a string literal or bare word, in the file's code page."""
+    return document.decode(unquote(token) if token.startswith('"') else token)
+
+
+def _literal(document: Document, text: str, quoted: bool = True) -> str:
+    """Token text for `text`: a string literal (or a bare word), in the file's code page."""
+    return document.encode(quote(text) if quoted else text)
+
+
 class MaAttribute(AttributeRecord):
     """A `setAttr` statement."""
 
@@ -56,7 +67,7 @@ class MaAttribute(AttributeRecord):
     @property
     def name(self) -> str:
         tokens = self._tokens()
-        return unquote(tokens[self._name_position(tokens)].text)[1:]
+        return _read(self._document, tokens[self._name_position(tokens)].text)[1:]
 
     @property
     def type(self) -> str:
@@ -64,7 +75,7 @@ class MaAttribute(AttributeRecord):
         position = _flag_value(tokens, "-type")
         if position is None:
             return ""
-        value_type = unquote(tokens[position].text)
+        value_type = _read(self._document, tokens[position].text)
         return _VALUE_TYPES.get(value_type, value_type)
 
     def get_value(self) -> AttributeValue:
@@ -74,14 +85,15 @@ class MaAttribute(AttributeRecord):
         if position is None:
             raise NotImplementedError("numeric values are not decoded yet")
         if value_type == "STR":
-            return unquote(tokens[position + 1].text)
+            return _read(self._document, tokens[position + 1].text)
         if value_type == "STR#":
             count = int(tokens[position + 1].text)
             return [
-                unquote(t.text) for t in tokens[position + 2 : position + 2 + count]
+                _read(self._document, t.text)
+                for t in tokens[position + 2 : position + 2 + count]
             ]
         if value_type == "REFE":
-            return _decode_edits(tokens[position + 1 :])[0]
+            return _decode_edits(self._document, tokens[position + 1 :])[0]
         raise NotImplementedError(f"{value_type} values are not decoded yet")
 
     def set_value(self, value: AttributeValue) -> None:
@@ -89,18 +101,20 @@ class MaAttribute(AttributeRecord):
         position = _flag_value(tokens, "-type")
         value_type = self.type
         if value_type == "STR" and isinstance(value, str) and position is not None:
-            self._document.replace_tokens(self._index, {position + 1: quote(value)})
+            self._document.replace_tokens(
+                self._index, {position + 1: _literal(self._document, value)}
+            )
         elif value_type == "STR#" and isinstance(value, list) and position is not None:
             count = int(tokens[position + 1].text)
             replacements = {position + 1: str(len(value))}
             string_slots = list(range(position + 2, position + 2 + count))
             for slot, text in zip(string_slots, value):
-                replacements[slot] = quote(text)
+                replacements[slot] = _literal(self._document, text)
             for slot in string_slots[len(value) :]:
                 replacements[slot] = ""
             if len(value) > count:
                 last = string_slots[-1] if string_slots else position + 1
-                extra = " ".join(quote(t) for t in value[count:])
+                extra = " ".join(_literal(self._document, t) for t in value[count:])
                 replacements[last] = f"{replacements[last]} {extra}"
             self._document.replace_tokens(self._index, replacements)
         elif (
@@ -108,14 +122,14 @@ class MaAttribute(AttributeRecord):
             and isinstance(value, ReferenceEdits)
             and position is not None
         ):
-            current, slots = _decode_edits(tokens[position + 1 :])
+            current, slots = _decode_edits(self._document, tokens[position + 1 :])
             before, after = _strings(current), _strings(value)
             if len(before) != len(after):
                 raise NotImplementedError("adding or removing reference edits in .ma")
             self._document.replace_tokens(
                 self._index,
                 {
-                    position + 1 + slot: quote(new) if quoted else new
+                    position + 1 + slot: _literal(self._document, new, quoted)
                     for (slot, quoted), old, new in zip(slots, before, after)
                     if old != new
                 },
@@ -126,10 +140,12 @@ class MaAttribute(AttributeRecord):
             )
 
     def mentions(self, text: str) -> bool:
-        return self._document.contains(self._index, text)
+        return self._document.contains(self._index, self._document.encode(text))
 
 
-def _decode_edits(tokens: list[Token]) -> tuple[ReferenceEdits, list[tuple[int, bool]]]:
+def _decode_edits(
+    document: Document, tokens: list[Token]
+) -> tuple[ReferenceEdits, list[tuple[int, bool]]]:
     """Decode `dataReferenceEdits` tokens; also return each string's token
     position and whether it is quoted.
 
@@ -145,7 +161,7 @@ def _decode_edits(tokens: list[Token]) -> tuple[ReferenceEdits, list[tuple[int, 
         text = texts[position]
         quoted = text.startswith('"')
         slots.append((position, quoted))
-        return unquote(text) if quoted else text
+        return _read(document, text)
 
     owner = string(0)
     groups: list[tuple[str, list[ReferenceEdit]]] = []
@@ -206,13 +222,17 @@ class MaNode(NodeRecord):
     def _flag(self, flag: str) -> str | None:
         tokens = self._tokens()
         position = _flag_value(tokens, flag)
-        return None if position is None else unquote(tokens[position].text)
+        return (
+            None if position is None else _read(self._document, tokens[position].text)
+        )
 
     def _replace_flag(self, flag: str, value: str) -> None:
         position = _flag_value(self._tokens(), flag)
         if position is None:
             raise ValueError(f"{self.name} has no {flag} to change")
-        self._document.replace_tokens(self._index, {position: quote(value)})
+        self._document.replace_tokens(
+            self._index, {position: _literal(self._document, value)}
+        )
         self._tokens_cache = None
 
     @property
@@ -254,7 +274,7 @@ class MaNode(NodeRecord):
                 tokens = self._document.tokens(index)
                 position = _flag_value(tokens, "-uid")
                 if position is not None:
-                    return unquote(tokens[position].text)
+                    return _read(self._document, tokens[position].text)
         return None
 
     @property
@@ -312,7 +332,7 @@ class MaReference(ReferenceRecord):
 
     @property
     def path(self) -> str:
-        return unquote(self._document.tokens(self._index)[-1].text)
+        return _read(self._document, self._document.tokens(self._index)[-1].text)
 
     def set_path(self, value: str) -> None:
         indices = [self._index]
@@ -325,16 +345,16 @@ class MaReference(ReferenceRecord):
         file_type = file_type_for(value, self.file_type)
         for index in indices:
             tokens = self._document.tokens(index)
-            replacements = {len(tokens) - 1: quote(value)}
+            replacements = {len(tokens) - 1: _literal(self._document, value)}
             position = _flag_value(tokens, "-typ")
             if position is not None:
-                replacements[position] = quote(file_type)
+                replacements[position] = _literal(self._document, file_type)
             self._document.replace_tokens(index, replacements)
 
     @property
     def namespace(self) -> str:
         value = self._value("-ns")
-        return "" if value is None else unquote(value)
+        return "" if value is None else _read(self._document, value)
 
     @property
     def node(self) -> str:
@@ -352,13 +372,13 @@ class MaReference(ReferenceRecord):
     @property
     def file_type(self) -> str:
         value = self._value("-typ")
-        return "" if value is None else unquote(value)
+        return "" if value is None else _read(self._document, value)
 
 
 def _rfn(document: Document, index: int) -> str:
     tokens = document.tokens(index)
     position = _flag_value(tokens, "-rfn")
-    return "" if position is None else unquote(tokens[position].text)
+    return "" if position is None else _read(document, tokens[position].text)
 
 
 class MaConnection(ConnectionRecord):
@@ -374,11 +394,15 @@ class MaConnection(ConnectionRecord):
 
     @property
     def source(self) -> str:
-        return unquote(self._document.tokens(self._index)[self._strings()[0]].text)
+        return _read(
+            self._document, self._document.tokens(self._index)[self._strings()[0]].text
+        )
 
     @property
     def destination(self) -> str:
-        return unquote(self._document.tokens(self._index)[self._strings()[1]].text)
+        return _read(
+            self._document, self._document.tokens(self._index)[self._strings()[1]].text
+        )
 
     @property
     def next_available(self) -> bool:
@@ -387,11 +411,50 @@ class MaConnection(ConnectionRecord):
     def set_plugs(self, source: str, destination: str) -> None:
         first, second = self._strings()
         self._document.replace_tokens(
-            self._index, {first: quote(source), second: quote(destination)}
+            self._index,
+            {
+                first: _literal(self._document, source),
+                second: _literal(self._document, destination),
+            },
         )
 
     def mentions(self, text: str) -> bool:
-        return self._document.contains(self._index, text)
+        return self._document.contains(self._index, self._document.encode(text))
+
+
+class MaInstance(InstanceRecord):
+    """`parent -s -nc -r -add "child" "parent"`."""
+
+    def __init__(self, document: Document, index: int) -> None:
+        self._document = document
+        self._index = index
+
+    def _strings(self) -> list[int]:
+        tokens = self._document.tokens(self._index)
+        return [i for i, t in enumerate(tokens) if t.text.startswith('"')][-2:]
+
+    @property
+    def child(self) -> str:
+        tokens = self._document.tokens(self._index)
+        return _read(self._document, tokens[self._strings()[0]].text)
+
+    @property
+    def parent(self) -> str:
+        tokens = self._document.tokens(self._index)
+        return _read(self._document, tokens[self._strings()[1]].text)
+
+    def set_names(self, child: str, parent: str) -> None:
+        first, second = self._strings()
+        self._document.replace_tokens(
+            self._index,
+            {
+                first: _literal(self._document, child),
+                second: _literal(self._document, parent),
+            },
+        )
+
+    def mentions(self, text: str) -> bool:
+        return self._document.contains(self._index, self._document.encode(text))
 
 
 class MaRelationship(RelationshipRecord):
@@ -402,7 +465,10 @@ class MaRelationship(RelationshipRecord):
         self._index = index
 
     def _values(self) -> list[str]:
-        return [unquote(t.text) for t in self._document.tokens(self._index)[1:]]
+        return [
+            _read(self._document, t.text)
+            for t in self._document.tokens(self._index)[1:]
+        ]
 
     @property
     def kind(self) -> str:
@@ -417,12 +483,14 @@ class MaRelationship(RelationshipRecord):
         return self._values()[2:]
 
     def set_names(self, node: str, plugs: list[str]) -> None:
-        replacements = {2: quote(node)}
-        replacements.update({3 + i: quote(p) for i, p in enumerate(plugs)})
+        replacements = {2: _literal(self._document, node)}
+        replacements.update(
+            {3 + i: _literal(self._document, p) for i, p in enumerate(plugs)}
+        )
         self._document.replace_tokens(self._index, replacements)
 
     def mentions(self, text: str) -> bool:
-        return self._document.contains(self._index, text)
+        return self._document.contains(self._index, self._document.encode(text))
 
 
 class MaScene(SceneStorage):
@@ -436,6 +504,7 @@ class MaScene(SceneStorage):
         self._top_references: list[int] = []
         self._connections: list[int] = []
         self._relationships: list[int] = []
+        self._instances: list[int] = []
         self._file_info: list[int] = []
         self._requires: list[int] = []
         self._metadata: int | None = None
@@ -461,6 +530,8 @@ class MaScene(SceneStorage):
                 self._connections.append(index)
             elif command == "relationship":
                 self._relationships.append(index)
+            elif command == "parent" and document.contains(index, "-add"):
+                self._instances.append(index)
             elif command == "fileInfo":
                 self._file_info.append(index)
             elif command == "requires":
@@ -484,7 +555,7 @@ class MaScene(SceneStorage):
         for index in self._requires:
             tokens = self._document.tokens(index)
             if len(tokens) > 2 and tokens[1].text == "maya":
-                return unquote(tokens[2].text)
+                return _read(self._document, tokens[2].text)
         return ""
 
     @property
@@ -492,7 +563,9 @@ class MaScene(SceneStorage):
         info = {}
         for index in self._file_info:
             tokens = self._document.tokens(index)
-            info[unquote(tokens[1].text)] = unquote(tokens[2].text)
+            info[_read(self._document, tokens[1].text)] = _read(
+                self._document, tokens[2].text
+            )
         return info
 
     @property
@@ -503,12 +576,16 @@ class MaScene(SceneStorage):
             if tokens[1].text == "maya":
                 continue
             node_types = [
-                unquote(tokens[i + 1].text)
+                _read(self._document, tokens[i + 1].text)
                 for i, t in enumerate(tokens[:-1])
                 if t.text == "-nodeType"
             ]
             plugins.append(
-                Plugin(unquote(tokens[-2].text), unquote(tokens[-1].text), node_types)
+                Plugin(
+                    _read(self._document, tokens[-2].text),
+                    _read(self._document, tokens[-1].text),
+                    node_types,
+                )
             )
         return plugins
 
@@ -524,18 +601,25 @@ class MaScene(SceneStorage):
     def relationships(self) -> list[RelationshipRecord]:
         return [MaRelationship(self._document, i) for i in self._relationships]
 
+    def instances(self) -> list[InstanceRecord]:
+        return [MaInstance(self._document, i) for i in self._instances]
+
     def metadata(self) -> str | None:
         if self._metadata is None:
             return None
         tokens = self._document.tokens(self._metadata)
         position = _flag_value(tokens, "-v")
-        return None if position is None else unquote(tokens[position].text)
+        return (
+            None if position is None else _read(self._document, tokens[position].text)
+        )
 
     def set_metadata(self, text: str) -> None:
         assert self._metadata is not None  # only called after metadata() found a table
         position = _flag_value(self._document.tokens(self._metadata), "-v")
         assert position is not None
-        self._document.replace_tokens(self._metadata, {position: quote(text)})
+        self._document.replace_tokens(
+            self._metadata, {position: _literal(self._document, text)}
+        )
 
     def to_bytes(self) -> bytes:
         return self._document.to_bytes()

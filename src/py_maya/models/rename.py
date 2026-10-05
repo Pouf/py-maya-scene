@@ -90,11 +90,23 @@ def rename_node(
 def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> None:
     old_name = node.name
     names = scene._names()
-    old_path = node.path
-    new_path = old_path[: len(old_path) - len(old_name)] + new_name
+    # Every path of the node (instancing gives several) and what it becomes
+    old_paths = node.paths
+    new_paths = [p[: len(p) - len(old_name)] + new_name for p in old_paths]
+
+    def renamed_path(path: str) -> str:
+        for old, new in zip(old_paths, new_paths):
+            if path == old or _is_below(path, old):
+                return new + path[len(old) :]
+        return path
+
     # The node and its descendants change path; nodes sharing the old or new
     # name may change between short and full names
-    moved = [node] + [n for n in scene._nodes if _is_below(n.path, old_path)]
+    moved = [node] + [
+        n
+        for n in scene._nodes
+        if any(_is_below(p, old) for p in n.paths for old in old_paths)
+    ]
     affected = {id(n): n for n in moved}
     for name in (old_name, new_name):
         affected.update((id(n), n) for n in names.get(name, ()))
@@ -103,30 +115,31 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
     def count_after(name: str) -> int:
         return len(names.get(name, ())) + (name == new_name) - (name == old_name)
 
-    def full_name(target: Node) -> str:
-        name = new_name if target is node else target.name
+    def full_name(target: Node, path: str | None) -> str:
         if not target.is_dag:
-            return name
-        path = target.path
-        if path == old_path or _is_below(path, old_path):
-            return new_path + path[len(old_path) :]
-        return path
+            return new_name if target is node else target.name
+        return renamed_path(target.path if path is None else path)
 
-    def shortest_name(target: Node) -> str:
+    def shortest_name(target: Node, path: str | None) -> str:
+        # A short name cannot tell the instances of an instanced node apart
         name = new_name if target is node else target.name
-        return name if count_after(name) == 1 else full_name(target)
+        unique = count_after(name) == 1 and len(target.paths) == 1
+        return name if unique else full_name(target, path)
 
-    def rewriters(render: Callable[[Node], str]) -> tuple[Rewrite, Rewrite]:
+    def rewriters(render: Callable[[Node, str | None], str]) -> tuple[Rewrite, Rewrite]:
         def rewrite_node(text: str) -> str:
             prefix = ":" if text.startswith(":") else ""
             body = text[len(prefix) :]
             if body.rsplit("|", 1)[-1] in affected_names:
                 target = scene._find(body)
                 if target is not None and id(target) in affected:
-                    return prefix + render(target)
-            if _is_below(body, old_path):
+                    # The path the text names: an instanced node has several
+                    suffix = body if body.startswith("|") else f"|{body}"
+                    named = next((p for p in target.paths if p.endswith(suffix)), None)
+                    return prefix + render(target, named if "|" in body else None)
+            if any(_is_below(body, old) for old in old_paths):
                 # A node outside this file (referenced) below the renamed one
-                return prefix + new_path + body[len(old_path) :]
+                return prefix + renamed_path(body)
             return text
 
         def rewrite_plug(text: str) -> str:
@@ -163,6 +176,13 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
     for relationship in storage.relationships():
         if any(relationship.mentions(n) for n in needles):
             writes += _rewrite_relationship(relationship, rewrite_node, rewrite_plug)
+    for instance in storage.instances():
+        # The instanced node by full path, its extra parent like a CREA parent
+        child, parent = instance.child, instance.parent
+        if any(instance.mentions(n) for n in needles):
+            new_child, new_parent = edit_node(child), rewrite_node(parent)
+            if (new_child, new_parent) != (child, parent):
+                writes.append(partial(instance.set_names, new_child, new_parent))
     for attribute, edits in scene.reference_edits():
         changed = _rewrite_edits(edits, edit_node, edit_plug)
         if in_strings:

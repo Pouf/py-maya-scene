@@ -18,6 +18,12 @@ CASES = [
     ("names", [("|grpA", "grpRenamed")], "names_renamed", ["grp", "cube"]),
     ("names", [("|grpA|cube", "grpB")], "names_clash", ["grp", "cube"]),
     (
+        "instances",
+        [("hero", "villain"), ("copies", "doubles")],
+        "instances_renamed",
+        ["hero", "villain", "copies", "doubles"],
+    ),
+    (
         "refedits",
         [("localGrp", "renamedGrp"), ("localLoc", "renamedLoc")],
         "refedits_renamed",
@@ -54,6 +60,8 @@ def _touched(scene: Scene, tokens: list[str]) -> tuple[set, set, set]:
         for _, e in value.all_edits()
         if any(hit(s) for s in e.strings)
     }
+    # Instance records (`parent -add`) count as parents
+    parents |= {(i.child, i.parent) for i in scene._storage.instances()}
     return connections, parents, edits
 
 
@@ -93,7 +101,7 @@ def _content_rows(path: Path) -> list[tuple[str, ...]]:
 @pytest.mark.parametrize("version", VERSIONS)
 def test_content_table_matches_maya(ext: str, version: str, tmp_path: Path) -> None:
     scene = py_maya.parse(SAMPLES / version / f"rename_probe.{ext}")
-    for old, new in CASES[3][1]:
+    for old, new in next(c for c in CASES if c[0] == "rename_probe")[1]:
         scene.node(old).name = new
     scene.node("texRenamed").attr("ftn").value = "Q:/probe/new_tex.exr"
     scene.save(tmp_path / f"out.{ext}")

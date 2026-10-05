@@ -1,24 +1,37 @@
 """Lossless statement list of a Maya ASCII (`.ma`) file.
 
 A `.ma` file is a sequence of MEL statements ending with `;`. The document
-keeps the decoded text and each statement's end offset; a statement's text
-runs from the previous end to its own, so it carries the whitespace and
-comments before it. Edited statements are kept aside and spliced in on write,
-so everything else is written back byte for byte.
+keeps the text and each statement's end offset; a statement's text runs from
+the previous end to its own, so it carries the whitespace and comments before
+it. Edited statements are kept aside and spliced in on write, so everything
+else is written back byte for byte.
+
+The text is held as latin-1, one character per byte: MEL syntax is ASCII, the
+string stays compact whatever the file's code page holds, and the bytes come
+back exactly. `decode`/`encode` convert string values through the file's real
+code page (its `//Codeset:`).
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from array import array
 from typing import Iterator, NamedTuple
 
+# Possessive quantifiers (Python 3.11+) never backtrack; the patterns need no
+# backtracking, so they match the same, 2.4 times faster on big groom files
+_P = "+" if sys.version_info >= (3, 11) else ""
+# A string literal, as an unrolled loop: runs of plain characters match at C
+# speed and only escapes repeat (`(?:[^"\\]|\\.)*` repeats per character)
+_STRING = rf'"[^"\\]*{_P}(?:\\.[^"\\]*{_P})*{_P}"'
 # Leading whitespace and comment lines, the command word, then the arguments:
 # runs of anything but quotes and `;`, and complete string literals
 _STATEMENT = re.compile(
-    r'(?:\s|//[^\n]*\n)*([A-Za-z]\w*)[^";]*(?:"(?:[^"\\]|\\.)*"[^";]*)*;', re.S
+    rf'(?:\s|//[^\n]*\n)*{_P}([A-Za-z]\w*{_P})[^";]*{_P}(?:{_STRING}[^";]*{_P})*{_P};',
+    re.S,
 )
-_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|[^\s;"]+')
+_TOKEN = re.compile(rf'{_STRING}|[^\s;"]+', re.S)
 _CODESET = re.compile(r"//Codeset: (\S+)")
 
 
@@ -44,7 +57,7 @@ class Document:
 
     def __init__(self, data: bytes) -> None:
         self.encoding = codeset_encoding(data[:4096])
-        self.text = data.decode(self.encoding, "surrogateescape")
+        self.text = data.decode("latin-1")
         # Offsets and command codes in arrays: big files hold ~10M statements
         self._ends = array("q")
         self._commands = array("H")
@@ -65,13 +78,11 @@ class Document:
             self._commands.append(code)
             position = match.end()
         # After the last `;`: the `// End of` comment and final newline
-        self.tail = self.text[position:]
-        if self.tail.strip() and not all(
-            line.startswith("//") for line in self.tail.split("\n") if line.strip()
+        tail = self.text[position:]
+        if tail.strip() and not all(
+            line.startswith("//") for line in tail.split("\n") if line.strip()
         ):
-            raise ValueError(
-                f"unexpected text after the last statement: {self.tail[:60]!r}"
-            )
+            raise ValueError(f"unexpected text after the last statement: {tail[:60]!r}")
         self._edited: dict[int, str] = {}
 
     def __len__(self) -> int:
@@ -109,12 +120,22 @@ class Document:
             text = text[: token.start] + replacements[position] + text[token.end :]
         self._edited[index] = text
 
-    def iter_text(self) -> Iterator[str]:
+    def decode(self, raw: str) -> str:
+        """A string value as read from the document, in the file's code page."""
+        return raw.encode("latin-1").decode(self.encoding, "surrogateescape")
+
+    def encode(self, text: str) -> str:
+        """Text to write into the document, through the file's code page."""
+        return text.encode(self.encoding, "surrogateescape").decode("latin-1")
+
+    def _pieces(self) -> Iterator[str]:
+        # Unedited runs of statements as single slices
         start = 0
-        for index, end in enumerate(self._ends):
-            yield self._edited[index] if index in self._edited else self.text[start:end]
-            start = end
-        yield self.tail
+        for index in sorted(self._edited):
+            yield self.text[start : self._ends[index - 1] if index else 0]
+            yield self._edited[index]
+            start = self._ends[index]
+        yield self.text[start:]
 
     def to_bytes(self) -> bytes:
-        return "".join(self.iter_text()).encode(self.encoding, "surrogateescape")
+        return "".join(self._pieces()).encode("latin-1")
