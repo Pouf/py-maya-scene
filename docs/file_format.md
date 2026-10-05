@@ -198,8 +198,9 @@ a channel, a stream, then per row an index line and a values line,
 
 ## Maya ASCII (`.ma`)
 
-A MEL script (with LF line endings when Maya writes it), in the code page named by its
-`//Codeset:` comment (1252 for every production file). Statements in order:
+A MEL script, in the code page named by its `//Codeset:` comment (1252 for
+every production file), with LF or CRLF line endings (CRLF in 1005 of the
+3301 non-empty production files, Maya 2016 to 2022). Statements in order:
 `file -rdi` / `file -r` per reference, `requires`, `currentUnit`, `fileInfo`,
 then `createNode` blocks, `select -ne` blocks for default nodes,
 `connectAttr` / `relationship` / `parent -add` (instances), and an optional
@@ -232,9 +233,11 @@ byte for byte; the other 5 hold `.mb` chunks partway through.
 - `parent -s -nc -r -add "child" "parent"` (also spelled with long flags,
   `-shape -noConnections -relative -addObject`) adds a parent: instancing.
 - `applyMetadata -fmt "raw" -v "<text>"` holds the externalContentTable text.
-- Maya writes short flags, but files written by scripts may use long ones
-  (`createNode transform -name "ALL" -parent "rig"`), with CRLF line endings.
-  A reader must accept both spellings of every flag it reads.
+- Maya writes short flags, but 8 production files, written by scripts, use
+  long ones throughout (`createNode transform -name "ALL" -parent "rig"`,
+  `rename -uuid`, `select -noExpand`, `connectAttr -nextAvailable`). A reader
+  must accept both spellings of every flag it reads. No production file puts
+  `createNode` flags before the type or spells `setAttr -type` short.
 - Opening a `.ma`, Maya keeps its own node (and UUID) for the nodes every
   scene starts with (`lightLinker1`, `layerManager`, `renderLayerManager`),
   though the file stores a UUID for them.
