@@ -9,10 +9,11 @@ byte sequence survives a decode/encode cycle. Layouts are documented in
 from __future__ import annotations
 
 import struct
-from typing import Iterator, List, NamedTuple, Tuple
+from typing import Callable, Iterator, List, NamedTuple, Tuple
 
 UUID_SIZE = 16
 _U32 = struct.Struct(">I")
+_DOUBLE = struct.Struct(">d")
 _UUID_WORDS = struct.Struct("<4I")
 
 
@@ -62,6 +63,14 @@ def split_attribute(data: bytes) -> tuple[str, int, bytes]:
 
 def join_attribute(name: str, flags: int, value: bytes) -> bytes:
     return encode_text(name) + b"\x00" + bytes((flags,)) + value
+
+
+def decode_double(value: bytes) -> float:
+    """`DBLE` value holding one double (also booleans, integers and enums;
+    times are integer ticks under the same tag)."""
+    if len(value) != 8:
+        raise ValueError(f"not a single double: {value!r}")
+    return float(_DOUBLE.unpack(value)[0])
 
 
 def decode_string(value: bytes) -> str:
@@ -143,6 +152,39 @@ def decode_reference(data: bytes, with_depth: bool) -> ReferenceFields:
     )
 
 
+def replace_reference_strings(
+    data: bytes, with_depth: bool, replace: Callable[[str], str]
+) -> bytes:
+    """A `FREF`/`FRDI` payload with its path, namespace, reference node and
+    `-op` options string (the string before the file type, empty for a
+    deferred reference) put through `replace`; every other byte is kept."""
+    start = 4 if with_depth else 0
+    path_end = data.index(b"\x00", start)
+    namespace_end = data.index(b"\x00", path_end + 1)
+    node_start = namespace_end + 3
+    node_end = data.index(b"\x00", node_start)
+    stripped = data.rstrip(b"\x00")
+    options_end = stripped.rfind(b"\x00")
+    options_start = data.rfind(b"\x00", node_end, options_end) + 1
+
+    def swap(begin: int, end: int) -> bytes:
+        return encode_text(replace(decode_text(data[begin:end])))
+
+    return b"".join(
+        (
+            data[:start],
+            swap(start, path_end),
+            data[path_end : path_end + 1],
+            swap(path_end + 1, namespace_end),
+            data[namespace_end:node_start],
+            swap(node_start, node_end),
+            data[node_end:options_start],
+            swap(options_start, options_end),
+            data[options_end:],
+        )
+    )
+
+
 def decode_includes(data: bytes) -> list[str]:
     """`INCL`: paths, each followed by `(`."""
     return [decode_text(p) for p in data.split(b"(")[:-1]]
@@ -178,6 +220,10 @@ def decode_file_info(data: bytes) -> tuple[str, str]:
     """`FINF`: `key\\0value\\0`."""
     key, value, _ = data.split(b"\x00")
     return decode_text(key), decode_text(value)
+
+
+def encode_file_info(key: str, value: str) -> bytes:
+    return encode_string(key) + encode_string(value)
 
 
 def decode_connection(data: bytes) -> tuple[int, str, str]:

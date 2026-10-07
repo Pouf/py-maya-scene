@@ -9,7 +9,7 @@ from __future__ import annotations
 from ..ascii import Document, Token
 from ..binary.scene_chunks import ReferenceEdit, ReferenceEdits
 from ..data.node_types import DEFAULT_NODES, PARENT_TYPES, TYPE_NAMES
-from ..mel import quote, unquote
+from ..mel import number, quote, unquote
 from ..resolvers.file_attributes import type_chain
 from .base import (
     AttributeRecord,
@@ -168,6 +168,13 @@ class MaAttribute(AttributeRecord):
             raise TypeError(
                 f"cannot store {type(value).__name__} in a {value_type or 'numeric'} value"
             )
+
+    def get_number(self) -> float:
+        tokens = self._tokens()
+        values = tokens[self._name_position(tokens) + 1 :]
+        if len(values) != 1:
+            raise NotImplementedError("only single values are decoded")
+        return number(values[0].text)
 
     def mentions(self, text: str) -> bool:
         return self._document.contains(self._index, self._document.encode(text))

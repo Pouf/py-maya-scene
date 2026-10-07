@@ -38,3 +38,12 @@ def string_setattr_value(arguments: str) -> str | None:
 
 def string_setattr_arguments(value: str) -> str:
     return f' -type "string" {quote(value)}'
+
+
+# MEL's spellings of booleans, as `setAttr` writes them
+_BOOLEANS = {"yes": 1.0, "on": 1.0, "true": 1.0, "no": 0.0, "off": 0.0, "false": 0.0}
+
+
+def number(text: str) -> float:
+    """A MEL number or boolean literal (`1`, `0.5`, `yes`, `off`); `ValueError` otherwise."""
+    return _BOOLEANS[text] if text in _BOOLEANS else float(text)

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Optional, Tuple, Union
 
 from ..binary.scene_chunks import ReferenceEdit, ReferenceEdits
-from ..mel import string_setattr_arguments, string_setattr_value
+from ..mel import number, string_setattr_arguments, string_setattr_value
 from ..metadata import ContentRow, ContentTable
 from ..resolvers.file_attributes import (
     file_attribute_long_names,
@@ -42,12 +42,15 @@ class Dependency(NamedTuple):
     stored, e.g. `ftn`) or `"reference edit"` (a value set on a referenced
     node; `node` and `attribute` as the edit names them, long attribute name).
     `node` is a long name; for a reference, the reference node.
+    `sequence` is True when `path` is one frame of an image sequence: the
+    node has `useFrameExtension` on, in this file or by a reference edit.
     """
 
     path: str
     node: str
     attribute: str | None
     kind: str
+    sequence: bool = False
 
 
 class Scene:
@@ -106,7 +109,8 @@ class Scene:
         changed = False
         for row, owner, attribute in bindings:
             if attribute is None:
-                node_name, path = row.node, owner.path
+                assert isinstance(owner, Reference)  # a reference's own row
+                node_name, path = owner.node, owner.path
             else:
                 value = attribute.value
                 if not isinstance(value, str):
@@ -264,20 +268,51 @@ class Scene:
         dependencies = [
             Dependency(r.path, r.node, None, "reference") for r in self._all_references
         ]
+        frames: dict[int, bool] = {}
         for attribute in self.file_attributes(extra):
+            node = attribute.node
+            if id(node) not in frames:
+                frames[id(node)] = _uses_frames(node)
             value = attribute.value
             for path in value if isinstance(value, list) else [value]:
                 if isinstance(path, str) and path:
                     dependencies.append(
                         Dependency(
-                            path, attribute.node.path, attribute.name, "attribute"
+                            path,
+                            node.path,
+                            attribute.name,
+                            "attribute",
+                            frames[id(node)],
                         )
                     )
+        edited_frames = self._frame_edits()
         for _, _, edit, path in self._file_edits(extra):
+            node_name, attribute_name = edit.strings[0], edit.strings[1]
             dependencies.append(
-                Dependency(path, edit.strings[0], edit.strings[1], "reference edit")
+                Dependency(
+                    path,
+                    node_name,
+                    attribute_name,
+                    "reference edit",
+                    node_name in edited_frames,
+                )
             )
         return dependencies
+
+    def _frame_edits(self) -> set[str]:
+        """Referenced nodes whose `useFrameExtension` this file's edits turn on."""
+        nodes = set()
+        for _, edits in self.reference_edits():
+            for _, edit in edits.all_edits():
+                if edit.kind != 2 or leaf_name(edit.strings[1]) not in _FRAMES:
+                    continue
+                values = edit.strings[2].split()
+                try:
+                    if len(values) == 1 and number(values[0]):
+                        nodes.add(edit.strings[0])
+                except ValueError:
+                    pass
+        return nodes
 
     def remap_paths(
         self,
@@ -319,6 +354,47 @@ class Scene:
             attribute.value = edits
         return changed
 
+    def replace_strings(self, replace: Callable[[str], str]) -> int:
+        """Put the names and strings the file stores through `replace`, like a
+        text replace over the whole file; return how many changed. `.mb` only.
+
+        Covered: node names and parents, the nodes named by connections,
+        relationships, instances and reference edits, the values set by
+        reference edits, string attribute values (paths, notes, expression
+        and script MEL), references (path, namespace, reference node, cached
+        options), `fileInfo`, and the externalContentTable (CRCs recomputed).
+        Attribute names, node types, plugins and default nodes are left
+        alone, everywhere: a match in an attribute name changes nothing.
+
+        Names stay consistent when `replace` changes a name the same way
+        wherever it appears: on its own, in a DAG path (`|grp|name`), after
+        a namespace (`ns:name`).
+        """
+        self._before_edit()
+        changed = self._storage.replace_strings(replace)
+        assert self._content is not None  # bound by _before_edit
+        table, bindings = self._content
+        # Bound rows follow their node, attribute or reference on save; the
+        # others (plugin attributes the schema lacks) get the text replace
+        bound = {id(row) for row, _, _ in bindings}
+        rows = 0
+        for row in table.rows:
+            if id(row) in bound:
+                continue
+            path = replace(row.path)
+            resolved = row.resolved_path if path == row.path else _resolved(path)
+            rows += row.update(
+                replace(row.node), path, resolved, self._storage.codepage
+            )
+        if rows:
+            self._storage.set_metadata(table.text)
+        # Names changed under the caches
+        self._by_name = None
+        self._path_cache.clear()
+        self._paths_cache.clear()
+        self._extra_parents = None
+        return changed + rows
+
     def save(self, path: str | Path) -> None:
         """Save to a new file; refuses to overwrite one (`FileExistsError`).
 
@@ -350,6 +426,20 @@ class Scene:
 def _remapped(remap: Callable[[str], str | None], path: str) -> str:
     new = remap(path)
     return path if new is None else new
+
+
+# `useFrameExtension`: the file name is one frame of a sequence (file, imagePlane)
+_FRAMES = ("useFrameExtension", "ufe")
+
+
+def _uses_frames(node: Node) -> bool:
+    for record in node._record.attributes():
+        if record.name == "ufe":
+            try:
+                return record.get_number() != 0
+            except (NotImplementedError, ValueError):
+                return False
+    return False
 
 
 def _resolved(path: str) -> str:

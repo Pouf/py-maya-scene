@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import io
+from typing import Callable, List, cast
 
 from ..binary import Chunk, GroupChunk, extent, read_mb, write_mb
 from ..binary.scene_chunks import (
     Crea,
+    ReferenceEdit,
     ReferenceEdits,
     decode_connection,
     decode_crea,
+    decode_double,
     decode_file_info,
     decode_includes,
     decode_instance,
@@ -23,6 +26,7 @@ from ..binary.scene_chunks import (
     decode_text,
     encode_connection,
     encode_crea,
+    encode_file_info,
     encode_includes,
     encode_instance,
     encode_metadata,
@@ -36,6 +40,7 @@ from ..binary.scene_chunks import (
     join_attribute,
     reference_file_type,
     replace_reference_file_type,
+    replace_reference_strings,
     split_attribute,
     split_reference,
     type_id_of,
@@ -58,9 +63,14 @@ from .base import (
 # Root groups that are not nodes; PING holds the extra parents of instancing
 _NOT_NODES = (b"HEAD", b"FRDI", b"FREF", b"PING")
 # Chunks in a node group that are not attribute values: addAttr and aliasAttr
-# Chunks in a node group that are not attribute values: addAttr and aliasAttr
 _NOT_VALUES = (b"ATTR", b"ATAL")
 _STRING_TAGS = (b"STR ", b"STR#")
+_REPLACED_TAGS = _STRING_TAGS + (b"REFE",)
+# What each reference edit string holds, by edit kind: a node name ("n"), a
+# plug ("p"), MEL values ("v"), or an attribute name or flags ("-", kept).
+# Kind 5 depends on its side: both ends referenced (0), or one (3, 4)
+_EDIT_ROLES = {0: "nn-", 1: "n---", 2: "n-v", 3: "pp-", 4: "n--", 8: "n-", 9: "n-"}
+_CONNECT_ROLES_BOTH, _CONNECT_ROLES_ONE = "npppp-", "npp-"
 # CREA flags set on DAG nodes and on transforms only (48k nodes checked
 # against the type hierarchy, fixtures and production files)
 _DAG_FLAG = 0x04
@@ -102,6 +112,12 @@ class MbAttribute(AttributeRecord):
                 f"cannot store {type(value).__name__} in a {self.type} value"
             )
         self._chunk.data = join_attribute(name, flags, raw)
+
+    def get_number(self) -> float:
+        _, _, raw = split_attribute(self._chunk.data)
+        if self._chunk.tag != b"DBLE" or len(raw) != 8:
+            raise NotImplementedError(f"{self.type} values are not decoded yet")
+        return decode_double(raw)
 
     def mentions(self, text: str) -> bool:
         return encode_text(text) in self._chunk.data
@@ -392,6 +408,113 @@ class MbScene(SceneStorage):
 
     def set_metadata(self, text: str) -> None:
         self._trailer_chunk(b"SMTD").data = encode_metadata(text)
+
+    def replace_strings(self, replace: Callable[[str], str]) -> int:
+        changed = 0
+
+        def swap(text: str) -> str:
+            nonlocal changed
+            new = replace(text)
+            changed += new != text
+            return new
+
+        defaults = set(DEFAULT_NODES) | {n.name for n in self._nodes if n.is_default}
+
+        def swap_node(name: str) -> str:
+            # Name by name along a DAG path, keeping Maya's default nodes
+            # (`:time1`, `|persp|perspShape`) wherever they are named
+            if "|" in name:
+                return "|".join(
+                    swap_node(part) if part else "" for part in name.split("|")
+                )
+            return name if name.lstrip(":") in defaults else swap(name)
+
+        def swap_plug(plug: str) -> str:
+            # Node names hold no ".": the rest is the attribute, kept
+            node, dot, attribute = plug.partition(".")
+            return swap_node(node) + dot + attribute
+
+        swaps: dict[str, Callable[[str], str]] = {
+            "n": swap_node,
+            "p": swap_plug,
+            "v": swap,
+            "-": lambda text: text,
+        }
+
+        def swap_edit(edit: ReferenceEdit) -> ReferenceEdit:
+            if edit.kind == 5:
+                roles = _CONNECT_ROLES_BOTH if edit.side == 0 else _CONNECT_ROLES_ONE
+            else:
+                roles = _EDIT_ROLES[edit.kind]
+            return edit._replace(
+                strings=[swaps[r](s) for r, s in zip(roles, edit.strings)]
+            )
+
+        for chunk in self._header_chunks(b"FINF"):
+            key, value = decode_file_info(chunk.data)
+            chunk.data = encode_file_info(swap(key), swap(value))
+        for chunk in self._header_chunks(b"INCL") + [
+            c for c in self._trailer.chunks if isinstance(c, Chunk) and c.tag == b"INCL"
+        ]:
+            chunk.data = encode_includes([swap(p) for p in decode_includes(chunk.data)])
+        for group in self._root.chunks:
+            if isinstance(group, GroupChunk) and group.form_type in (b"FRDI", b"FREF"):
+                chunk = _only_chunk(group)
+                with_depth = group.form_type == b"FRDI"
+                data = replace_reference_strings(chunk.data, with_depth, swap)
+                path = decode_reference(data, with_depth).path
+                file_type = file_type_for(path, reference_file_type(data))
+                chunk.data = replace_reference_file_type(data, file_type)
+        for node in cast(List[MbNode], self._nodes):
+            if not node.is_default:
+                crea = node._crea()
+                name = swap_node(crea.name)
+                parent = None if crea.parent is None else swap_node(crea.parent)
+                if (name, parent) != (crea.name, crea.parent):
+                    node._store_crea(crea._replace(name=name, parent=parent))
+            for child in node._group.chunks[1:]:
+                if not isinstance(child, Chunk) or child.tag not in _REPLACED_TAGS:
+                    continue
+                attribute, flags, raw = split_attribute(child.data)
+                if child.tag == b"STR ":
+                    new_raw = encode_string(swap(decode_string(raw)))
+                elif child.tag == b"STR#":
+                    new_raw = encode_string_array(
+                        [swap(s) for s in decode_string_array(raw)]
+                    )
+                else:
+                    edits = decode_reference_edits(raw)
+                    new_raw = encode_reference_edits(
+                        ReferenceEdits(
+                            swap_node(edits.owner),
+                            [
+                                [
+                                    (swap_node(n), [swap_edit(e) for e in g])
+                                    for n, g in section
+                                ]
+                                for section in edits.sections
+                            ],
+                        )
+                    )
+                if new_raw != raw:
+                    child.data = join_attribute(attribute, flags, new_raw)
+        for chunk in self._instances:
+            flags, instanced, parent_name = decode_instance(chunk.data)
+            chunk.data = encode_instance(
+                flags, swap_node(instanced), swap_node(parent_name)
+            )
+        for chunk in self._links:
+            if chunk.tag == b"CWFL":
+                flags, source, destination = decode_connection(chunk.data)
+                chunk.data = encode_connection(
+                    flags, swap_plug(source), swap_plug(destination)
+                )
+            elif chunk.tag == b"RELA":
+                kind, node_name, plugs = decode_relationship(chunk.data)
+                chunk.data = encode_relationship(
+                    kind, swap_node(node_name), [swap_plug(p) for p in plugs]
+                )
+        return changed
 
     def to_bytes(self) -> bytes:
         # BCSZ stores the distance from the start of the trailer group to itself

@@ -24,3 +24,9 @@ def test_string_setattr_arguments() -> None:
     assert mel.string_setattr_value(arguments) == "P:/a\\b.exr"
     assert mel.string_setattr_arguments("P:/a\\b.exr") == arguments
     assert mel.string_setattr_value(' -type "double3" 5 0 0') is None
+
+
+def test_number() -> None:
+    assert [mel.number(t) for t in ("yes", "off", "1", "-2.5")] == [1, 0, 1, -2.5]
+    with pytest.raises(ValueError):
+        mel.number('"1"')

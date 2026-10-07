@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import py_maya
+from py_maya.binary import Chunk
+from py_maya.binary.scene_chunks import ReferenceEdit
 from py_maya.data.node_types import DEFAULT_NODES
 from py_maya.metadata import ContentTable, path_crc
 from py_maya.models import Dependency, Scene
@@ -112,6 +115,50 @@ def test_deps_fixture(ext: str) -> None:
         "|transform1|gpuCache1",
         True,
     )
+
+
+def _sequences(scene: Scene) -> dict[str, bool]:
+    return {d.path: d.sequence for d in scene.dependencies() if d.kind != "reference"}
+
+
+def test_sequences_mb(tmp_path: Path) -> None:
+    # As Maya stores `setAttr ".ufe" yes` (seen in production): flag 0x20, 1.0
+    scene = py_maya.parse(SAMPLES / "maya2024" / "refs.mb")
+    attribute, edits = next(
+        (a, e) for a, e in scene.reference_edits() if e.owner == "depsRN"
+    )
+    group = next(g for section in edits.sections for n, g in section if g)
+    texture = next(e.strings[0] for e in group if e.strings[1] == "fileTextureName")
+    group.append(ReferenceEdit(2, None, [texture, "useFrameExtension", " 1"]))
+    attribute.value = edits
+    _save(scene, tmp_path)
+    found = _sequences(py_maya.parse(tmp_path / "out.mb"))
+    assert found.pop("P:/edited/in/parent.exr")
+    assert not any(found.values())
+
+    scene = py_maya.parse(SAMPLES / "maya2024" / "deps.mb")
+    scene.node("unicodeTex")._record._group.chunks.append(
+        Chunk(b"DBLE", b"ufe\x00\x20" + struct.pack(">d", 1.0))
+    )
+    found = _sequences(scene)
+    assert found.pop("P:/projets/d\u00e9mo/textures/\u00e9toile.png")
+    assert not any(found.values())
+
+
+def test_sequences_ma(tmp_path: Path) -> None:
+    path = tmp_path / "sequences.ma"
+    path.write_bytes(
+        b'createNode file -n "plate";\n'
+        b'\tsetAttr ".ftn" -type "string" "P:/plates/plate.1001.exr";\n'
+        b'\tsetAttr ".ufe" yes;\n'
+        b'createNode file -n "still";\n'
+        b'\tsetAttr ".ftn" -type "string" "P:/plates/still.1001.exr";\n'
+        b'\tsetAttr ".ufe" no;\n'
+    )
+    assert _sequences(py_maya.parse(path)) == {
+        "P:/plates/plate.1001.exr": True,
+        "P:/plates/still.1001.exr": False,
+    }
 
 
 @pytest.mark.parametrize("ext", FORMATS)
