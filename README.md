@@ -16,15 +16,17 @@ Everything below works the same on `.mb` and `.ma` (Maya 2018 to 2025), through 
 
 * Byte-identical round-trip: parse then save without edits gives the same bytes (all 771 production `.mb` and 3300 of 3305 production `.ma`; files that cannot be reproduced are refused at parse time); edits rewrite only the values they change, keeping Maya's own layout around them
 * Scene model: version, file info, required plugins, references (at every depth, with file type), nodes (name, type, UUID, DAG paths including instances), string attribute values, connections
-* Listing and replacing external dependencies: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits). A reference moved to a `.ma` or `.mb` file gets the matching file type
+* Listing and replacing external dependencies: references, every attribute Maya flags as a file name (textures, caches, audio, Arnold, Alembic...) plus Yeti and Golaem ones seen in production, and paths set on referenced nodes (reference edits). A reference moved to a `.ma` or `.mb` file gets the matching file type. Paths read as image sequences (`useFrameExtension`, in the file or by a reference edit) are flagged
 * Reference edits: decoded and re-encoded byte for byte (parent, addAttr, setAttr, deleteAttr, connect/disconnectAttr, lock/unlock)
 * Renaming nodes (`node.name = "new"`, `node.rename(...)`): parents, connections, relationships, instances, reference edits and the `externalContentTable` that name the node or its descendants are rewritten the way Maya writes them, and a transform's shapes follow like with `maya.cmds.rename`; checked against renames done by Maya 2018, 2022 and 2024. Optionally (`in_strings=True`) also node names in string attributes and in expression / script node MEL, which Maya leaves alone
 * The `externalContentTable` follows remaps, renames and edited path values (CRC included)
+* `.mb` only: putting every name and string through a function (`scene.replace_strings(fn)`), like a text replace over a `.ma` file: node names, namespaces, reference nodes, the nodes named by connections and reference edits, string values, reference paths and `fileInfo`. Attribute names and Maya's default nodes are kept everywhere. Maya opens the result as the original with the names replaced, reference edits included
 * Saving atomically: `save(path)` refuses to overwrite, `save_in_place()` overwrites the parsed file
 * `maya-inspect`: chunk tree and chunk statistics of a `.mb` file
 
 ### Not supported (yet)
 * Renaming reference nodes and default nodes
+* `replace_strings` on `.ma` files
 * Values other than strings (numbers, matrices, meshes) are kept as stored but not decoded
 
 ### Planned

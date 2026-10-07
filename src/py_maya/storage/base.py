@@ -9,7 +9,7 @@ Setters write through to the storage; untouched records are never re-encoded.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, NamedTuple, Union
+from typing import Callable, List, NamedTuple, Union
 
 from ..binary.scene_chunks import ReferenceEdits
 
@@ -54,6 +54,12 @@ class AttributeRecord(ABC):
 
     @abstractmethod
     def set_value(self, value: AttributeValue) -> None: ...
+
+    @abstractmethod
+    def get_number(self) -> float:
+        """The value of an attribute the caller knows holds one double,
+        boolean, integer or enum (`.mb` stores times as integer ticks under
+        the same tag); `NotImplementedError` for any other storage."""
 
     @abstractmethod
     def mentions(self, text: str) -> bool:
@@ -248,6 +254,11 @@ class SceneStorage(ABC):
 
     @abstractmethod
     def set_metadata(self, text: str) -> None: ...
+
+    def replace_strings(self, replace: Callable[[str], str]) -> int:
+        """Put names, paths and string values through `replace` (see
+        `Scene.replace_strings`), the metadata excepted; return how many changed."""
+        raise NotImplementedError("replacing strings is only supported in .mb files")
 
     @abstractmethod
     def to_bytes(self) -> bytes: ...
