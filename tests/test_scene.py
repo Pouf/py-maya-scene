@@ -405,3 +405,41 @@ def test_save_refuses_to_overwrite(ext: str, tmp_path: Path) -> None:
         scene.save(tmp_path / f"out.{ext}")
     scene.save_in_place()
     assert scene.path == tmp_path / f"out.{ext}"
+
+
+@pytest.mark.parametrize("ext", FORMATS)
+def test_save_keeps_a_file_named_like_a_temporary(ext: str, tmp_path: Path) -> None:
+    keep = tmp_path / f"out.{ext}.tmp"
+    keep.write_bytes(b"user data")
+    py_maya.parse(SAMPLES / "maya2024" / f"ref_child.{ext}").save(
+        tmp_path / f"out.{ext}"
+    )
+    assert keep.read_bytes() == b"user data"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"out.{ext}", keep.name]
+
+
+@pytest.mark.parametrize("ext", FORMATS)
+def test_failed_write_leaves_the_file(
+    ext: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The temporary file is created, then writing it fails part-way (a full
+    # disk, a dropped network share): it is removed, the scene file untouched.
+    source = (SAMPLES / "maya2024" / f"ref_child.{ext}").read_bytes()
+    target = tmp_path / f"out.{ext}"
+    target.write_bytes(source)
+    scene = py_maya.parse(target)
+    real_open = Path.open
+
+    def open_then_fail(path: Path, *args: Any, **kwargs: Any) -> None:
+        with real_open(path, *args, **kwargs) as f:
+            f.write(b"partial")
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(Path, "open", open_then_fail)
+    with pytest.raises(OSError):
+        scene.save_in_place()
+    with pytest.raises(OSError):
+        scene.save(tmp_path / f"new.{ext}")
+    monkeypatch.undo()
+    assert target.read_bytes() == source
+    assert [p.name for p in tmp_path.iterdir()] == [target.name]
