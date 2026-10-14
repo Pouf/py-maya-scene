@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Optional, Tuple, Union
 
@@ -414,9 +415,15 @@ class Scene:
 
     def _write(self, target: Path) -> None:
         self._sync_content_table()
-        temporary = target.with_name(target.name + ".tmp")
-        temporary.write_bytes(self._storage.to_bytes())
-        os.replace(temporary, target)
+        data = self._storage.to_bytes()
+        temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as f:
+                f.write(data)
+            os.replace(temporary, target)
+        finally:
+            if temporary.exists():  # missing_ok needs Python 3.8
+                temporary.unlink()
         self._path = target
 
     def __repr__(self) -> str:
