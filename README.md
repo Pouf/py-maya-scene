@@ -36,6 +36,12 @@ Everything below works the same on `.mb` and `.ma` (Maya 2018 to 2025), through 
 ## Installation
 
 ```sh
+pip install py-maya-scene
+```
+
+The import name is `py_maya`. For development:
+
+```sh
 uv sync --extra dev
 ```
 

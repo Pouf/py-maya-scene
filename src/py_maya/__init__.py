@@ -15,7 +15,7 @@ except ImportError:
     import importlib_metadata  # type: ignore[import,no-redef]  # Python 3.7
 
 try:
-    __version__ = importlib_metadata.version("py-maya")
+    __version__ = importlib_metadata.version("py-maya-scene")
 except importlib_metadata.PackageNotFoundError:
     # Running from a source tree without an installed distribution.
     __version__ = "0.0.0"
