@@ -1,5 +1,6 @@
 [project]
-name = "py-maya"
+# "py-maya" is refused by PyPI as too close to the unrelated "pymaya".
+name = "py-maya-scene"
 dynamic = ["version"]
 description = "A package for working with Autodesk Maya scene files (.mb, .ma)."
 readme = "README.md"
