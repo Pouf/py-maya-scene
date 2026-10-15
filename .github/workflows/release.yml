@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+      - name: Build wheel and sdist
+        run: uv build
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ github.ref_name }}
+      - name: Store distribution packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  github-release:
+    name: Create GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Build Changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@aa013739bbc8e7067dbbecd4525ff11aeb51a84b  # v6
+        with:
+          mode: "COMMIT"
+          configuration: ".github/changelog-config.json"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Create Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v2
+        with:
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          files: dist/*
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/py-maya-scene
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
