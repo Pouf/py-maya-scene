@@ -6,10 +6,10 @@ from typing import Callable
 
 import pytest
 
-import py_maya
-from py_maya.data.node_types import DEFAULT_NODES
-from py_maya.metadata import ContentTable, path_crc
-from py_maya.models import Scene
+import py_maya_scene
+from py_maya_scene.data.node_types import DEFAULT_NODES
+from py_maya_scene.metadata import ContentTable, path_crc
+from py_maya_scene.models import Scene
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
 MB_FILES = sorted(SAMPLES.glob("*/*.mb"))
@@ -59,19 +59,19 @@ def _view(scene: Scene) -> dict:
 
 @pytest.mark.parametrize("path", MB_FILES, ids=_id)
 def test_identity_keeps_every_byte(path: Path) -> None:
-    scene = py_maya.parse(path)
+    scene = py_maya_scene.parse(path)
     assert scene.replace_strings(lambda text: text) == 0
     assert scene._storage.to_bytes() == path.read_bytes()
 
 
 @pytest.mark.parametrize("path", MB_FILES, ids=_id)
 def test_names_change_everywhere_alike(path: Path, tmp_path: Path) -> None:
-    scene = py_maya.parse(path)
+    scene = py_maya_scene.parse(path)
     rename = _renamer(scene)
     before = _view(scene)
     assert scene.replace_strings(rename) > 0
     scene.save(tmp_path / path.name)
-    after = _view(py_maya.parse(tmp_path / path.name))
+    after = _view(py_maya_scene.parse(tmp_path / path.name))
 
     assert after["nodes"] == [
         ([rename(p) for p in paths], attributes)
@@ -89,11 +89,11 @@ def test_names_change_everywhere_alike(path: Path, tmp_path: Path) -> None:
 
 def test_content_table_crcs_follow(tmp_path: Path) -> None:
     path = SAMPLES / "maya2024" / "deps.mb"
-    scene = py_maya.parse(path)
+    scene = py_maya_scene.parse(path)
     scene.replace_strings(lambda text: text.replace("textures", "maps"))
     scene.save(tmp_path / "out.mb")
     rows = ContentTable(
-        py_maya.parse(tmp_path / "out.mb")._storage.metadata() or ""
+        py_maya_scene.parse(tmp_path / "out.mb")._storage.metadata() or ""
     ).rows
     assert any("maps" in row.path for row in rows)
     for row in rows:
@@ -101,6 +101,6 @@ def test_content_table_crcs_follow(tmp_path: Path) -> None:
 
 
 def test_ma_is_not_supported() -> None:
-    scene = py_maya.parse(SAMPLES / "maya2024" / "names.ma")
+    scene = py_maya_scene.parse(SAMPLES / "maya2024" / "names.ma")
     with pytest.raises(NotImplementedError):
         scene.replace_strings(lambda text: text)

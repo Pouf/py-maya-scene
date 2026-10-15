@@ -1,4 +1,4 @@
-"""Generate `src/py_maya/data/node_types.py` from mayapy schema dumps.
+"""Generate `src/py_maya_scene/data/node_types.py` from mayapy schema dumps.
 
     uv run python scripts/gen_node_types.py build/schema/maya2018.json build/schema/maya2022.json build/schema/maya2024.json
 
@@ -14,7 +14,7 @@ from pathlib import Path
 OUT = (
     Path(__file__).resolve().parent.parent
     / "src"
-    / "py_maya"
+    / "py_maya_scene"
     / "data"
     / "node_types.py"
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from py_maya import mel
+from py_maya_scene import mel
 
 
 @pytest.mark.parametrize(

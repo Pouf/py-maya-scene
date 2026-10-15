@@ -1,6 +1,6 @@
 """Payload layouts of the `.mb` chunks that describe a scene.
 
-Decoders return the fields py_maya uses; encoders rebuild the payload from
+Decoders return the fields py_maya_scene uses; encoders rebuild the payload from
 them, byte for byte. Text is decoded as UTF-8 with `surrogateescape`, so any
 byte sequence survives a decode/encode cycle. Layouts are documented in
 `docs/file_format.md`.

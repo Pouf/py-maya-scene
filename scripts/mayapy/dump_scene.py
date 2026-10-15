@@ -4,7 +4,7 @@
     "C:/Program Files/Autodesk/Maya2024/bin/mayapy.exe" scripts/mayapy/dump_scene.py samples/models/maya2024/*.mb
 
 Files are opened without loading references, so the JSON describes the file
-itself, which is what py_maya parses. Runs under Python 2.7 (Maya 2018).
+itself, which is what py_maya_scene parses. Runs under Python 2.7 (Maya 2018).
 """
 
 from __future__ import print_function, unicode_literals

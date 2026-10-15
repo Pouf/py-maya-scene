@@ -22,7 +22,7 @@ def leaf_name(attribute: str) -> str:
 class Attribute:
     """An attribute value stored on a node.
 
-    `value` decodes the storage types py_maya understands so far: strings
+    `value` decodes the storage types py_maya_scene understands so far: strings
     (`STR`), string arrays (`STR#`) and reference edits (`REFE`).
     """
 

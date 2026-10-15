@@ -2,7 +2,7 @@
 
 `.mb` (chunks) and `.ma` (MEL statements) store the same scene; each format
 implements these records over its own storage, and the models in
-`py_maya.models` (renaming, remapping, dependencies) work on records only.
+`py_maya_scene.models` (renaming, remapping, dependencies) work on records only.
 Setters write through to the storage; untouched records are never re-encoded.
 """
 

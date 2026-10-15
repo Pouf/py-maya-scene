@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Type check with mypy
-        run: uv run mypy src/py_maya
+        run: uv run mypy src/py_maya_scene
   pytest-37:
     needs: [ruff, mypy]
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-quality')

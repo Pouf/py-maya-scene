@@ -202,7 +202,7 @@ cmds.parent(
 save("instances")
 
 
-# Maya's own renames of the scenes above: what py_maya's renames must match
+# Maya's own renames of the scenes above: what py_maya_scene's renames must match
 def save_renamed(source, renames, name):
     cmds.file(os.path.join(OUT, source), open=True, force=True)
     for old, new in renames:

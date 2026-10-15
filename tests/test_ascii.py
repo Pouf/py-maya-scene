@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from py_maya.ascii import Document, codeset_encoding
+from py_maya_scene.ascii import Document, codeset_encoding
 
 SPLIT = (
     b'setAttr ".b" -type "string" "ab"\n\t\t+ "cd";\n'

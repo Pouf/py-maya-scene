@@ -1,4 +1,4 @@
-"""py_maya - Autodesk Maya scene file (.mb, .ma) reader and writer."""
+"""py_maya_scene - Autodesk Maya scene file (.mb, .ma) reader and writer."""
 
 from __future__ import annotations
 
