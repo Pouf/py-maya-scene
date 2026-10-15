@@ -45,12 +45,12 @@ docs = [
 ]
 
 [project.scripts]
-maya-inspect = "py_maya.cli.inspect:main"
+maya-inspect = "py_maya_scene.cli.inspect:main"
 
 [project.urls]
-Repository = "https://github.com/Pouf/py-maya"
-Documentation = "https://Pouf.github.io/py-maya/"
-Changelog = "https://github.com/Pouf/py-maya/releases"
+Repository = "https://github.com/Pouf/py-maya-scene"
+Documentation = "https://Pouf.github.io/py-maya-scene/"
+Changelog = "https://github.com/Pouf/py-maya-scene/releases"
 
 [build-system]
 requires = ["hatchling>=1.18", "hatch-vcs>=0.4"]
@@ -60,7 +60,7 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/py_maya"]
+packages = ["src/py_maya_scene"]
 
 [tool.hatch.build.targets.sdist]
 # samples/ is LFS-backed; a plain checkout would ship pointer files.
@@ -103,7 +103,7 @@ python_files = ["test_*.py"]
 addopts = "-v -ra --showlocals -n auto --dist worksteal --import-mode=importlib"
 
 [tool.coverage.run]
-source = ["src/py_maya"]
+source = ["src/py_maya_scene"]
 branch = true
 omit = ["tests/*"]
 

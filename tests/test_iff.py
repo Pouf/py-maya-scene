@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from py_maya.binary import Chunk, GroupChunk, read_mb, walk, write_mb
+from py_maya_scene.binary import Chunk, GroupChunk, read_mb, walk, write_mb
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 MB_FILES = sorted(SAMPLES.rglob("*.mb"))

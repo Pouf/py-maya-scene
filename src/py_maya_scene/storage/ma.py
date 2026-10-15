@@ -1,6 +1,6 @@
 """Scene records over a Maya ASCII (`.ma`) statement list.
 
-Only the statements py_maya interprets are tokenized, lazily; edits replace
+Only the statements py_maya_scene interprets are tokenized, lazily; edits replace
 single tokens, so the rest of a statement keeps Maya's own layout.
 """
 

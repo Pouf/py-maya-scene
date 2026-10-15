@@ -1,9 +1,9 @@
 [project]
-site_name = "py_maya"
+site_name = "py_maya_scene"
 site_description = "A Python library for Autodesk Maya scene files (.mb, .ma)"
-site_url = "https://Pouf.github.io/py-maya/"
-repo_url = "https://github.com/Pouf/py-maya"
-repo_name = "Pouf/py-maya"
+site_url = "https://Pouf.github.io/py-maya-scene/"
+repo_url = "https://github.com/Pouf/py-maya-scene"
+repo_name = "Pouf/py-maya-scene"
 edit_uri = "edit/main/docs/"
 nav = [
     { "Home" = "index.md" },

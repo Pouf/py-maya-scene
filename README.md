@@ -1,5 +1,5 @@
-# py_maya
-`py_maya` is a Python package for working with Autodesk Maya scene files (`.mb` and `.ma`) without Maya.
+# py_maya_scene
+`py_maya_scene` is a Python package for working with Autodesk Maya scene files (`.mb` and `.ma`) without Maya.
 
 Sibling project of [py-aep](https://github.com/forticheprod/py-aep) and [py-premiere](https://github.com/Pouf/py-premiere).
 
@@ -39,7 +39,7 @@ Everything below works the same on `.mb` and `.ma` (Maya 2018 to 2025), through 
 pip install py-maya-scene
 ```
 
-The import name is `py_maya`. For development:
+For development:
 
 ```sh
 uv sync --extra dev
@@ -48,9 +48,9 @@ uv sync --extra dev
 ## Getting started
 
 ```python
-import py_maya
+import py_maya_scene
 
-scene = py_maya.parse("shot.mb")
+scene = py_maya_scene.parse("shot.mb")
 for dependency in scene.dependencies():
     print(dependency.node, dependency.attribute, dependency.path)
 
@@ -63,7 +63,7 @@ scene.remap_paths(
 scene.save("shot_remapped.mb")
 
 # Shapes, parents, connections, reference edits and the externalContentTable follow
-scene = py_maya.parse("asset.ma")
+scene = py_maya_scene.parse("asset.ma")
 scene.node("box").name = "crate"
 scene.save("asset_renamed.ma")
 ```
