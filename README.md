@@ -1,7 +1,7 @@
 # py_maya_scene
 `py_maya_scene` is a Python package for working with Autodesk Maya scene files (`.mb` and `.ma`) without Maya.
 
-Sibling project of [py-aep](https://github.com/forticheprod/py-aep) and [py-premiere](https://github.com/Pouf/py-premiere).
+Sibling project of [py-aep](https://github.com/forticheprod/py-aep), [py-premiere](https://github.com/Pouf/py-premiere) and [py-houdini](https://github.com/Pouf/py-houdini).
 
 ## About
 
