@@ -6,7 +6,10 @@ Runs under any mayapy (Python 2.7 for Maya 2018, so no f-strings):
     "C:/Program Files/Autodesk/Maya2024/bin/mayapy.exe" scripts/mayapy/make_fixtures.py
 
 Each scene is saved as both .mb and .ma so every binary chunk has a text twin.
-References use `$PY_MAYA_SAMPLES` so the files do not embed a machine path.
+References use `$PY_MAYA_SAMPLES`, but Maya also stores their resolved path:
+run the script through a neutral path (`mklink /J C:\\py-maya-scene <this
+repository>`, then `mayapy C:/py-maya-scene/scripts/mayapy/make_fixtures.py`).
+The run stops if a saved file holds the home folder.
 """
 
 from __future__ import print_function, unicode_literals
@@ -26,6 +29,7 @@ OUT = os.path.join(ROOT, "samples", "models", "maya" + VERSION)
 if not os.path.isdir(OUT):
     os.makedirs(OUT)
 os.environ["PY_MAYA_SAMPLES"] = OUT.replace("\\", "/")
+HOME = os.path.expanduser("~").replace("\\", "/").lower().encode("utf-8")
 LOG_DIR = os.path.join(ROOT, "build")
 if not os.path.isdir(LOG_DIR):
     os.makedirs(LOG_DIR)
@@ -39,6 +43,11 @@ def save(name):
         path = os.path.join(OUT, name + ext)
         cmds.file(rename=path)
         cmds.file(save=True, type=kind, force=True)
+        with io.open(path, "rb") as f:
+            if HOME in f.read().lower():
+                raise RuntimeError(
+                    "%s names the home folder, run from a neutral path" % path
+                )
         log.write("saved %s\n" % path)
 
 
