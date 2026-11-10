@@ -66,6 +66,11 @@ packages = ["src/py_maya_scene"]
 # samples/ is LFS-backed; a plain checkout would ship pointer files.
 exclude = ["samples"]
 
+[tool.uv]
+# The lock is for development only: the dev tools dropped Python < 3.10, and
+# Python 3.7 tests install with pip
+environments = ["python_version >= '3.10'"]
+
 [tool.ruff]
 target-version = "py37"
 line-length = 88
