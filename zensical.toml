@@ -5,9 +5,28 @@ site_url = "https://Pouf.github.io/py-maya-scene/"
 repo_url = "https://github.com/Pouf/py-maya-scene"
 repo_name = "Pouf/py-maya-scene"
 edit_uri = "edit/main/docs/"
+extra_css = ["stylesheets/extra.css"]
 nav = [
     { "Home" = "index.md" },
+    { "Quick Start" = "quickstart.md" },
+    { "Contributing" = "contributing.md" },
+    { "Known Limitations" = "limitations.md" },
+    { "CLI Tools" = "cli.md" },
     { "File Format" = "file_format.md" },
+    { "API Reference" = [
+        { "Overview" = "api/index.md" },
+        { "Parsers" = "api/parsers.md" },
+        { "Scene" = "api/scene.md" },
+        { "Node" = "api/node.md" },
+        { "Attribute" = "api/attribute.md" },
+        { "Reference" = "api/reference.md" },
+        { "Other" = [
+            { "Reference Edits" = "api/other/reference_edits.md" },
+            { "Dependency" = "api/other/dependency.md" },
+            { "Connection" = "api/other/connection.md" },
+            { "Plugin" = "api/other/plugin.md" },
+        ] },
+    ] },
 ]
 
 # Palette toggle for automatic mode
@@ -42,6 +61,8 @@ features = [
     "navigation.top",
     "search.suggest",
     "search.highlight",
+    "content.tabs.link",
+    "content.code.annotation",
     "content.code.copy",
 ]
 
@@ -53,5 +74,45 @@ anchor_linenums = true
 
 [project.markdown_extensions.pymdownx.superfences]
 
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
+[project.markdown_extensions.pymdownx.magiclink]
+
 [project.markdown_extensions.toc]
 permalink = true
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["src"]
+inventories = ["https://docs.python.org/3/objects.inv"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_section_style = "list"
+docstring_style = "google"
+extensions = ["scripts/griffe_properties.py:PropertiesAsAttributes"]
+group_by_category = true
+heading_level = 2
+inherited_members = true
+members_order = "alphabetical"
+merge_init_into_class = false
+modernize_annotations = true
+parameter_headings = false
+separate_signature = true
+show_category_heading = true
+show_docstring_attributes = false
+show_docstring_parameters = true
+show_docstring_returns = true
+show_if_no_docstring = true
+show_labels = false
+show_root_full_path = false
+show_root_heading = true
+show_root_toc_entry = false
+show_signature_annotations = true
+show_signature = true
+show_source = false
+show_symbol_type_heading = true
+show_symbol_type_toc = true
+signature_crossrefs = true
+relative_crossrefs = true
+scoped_crossrefs = true
+filters = ["!^_"]

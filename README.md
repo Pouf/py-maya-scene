@@ -1,6 +1,8 @@
 # py_maya_scene
 `py_maya_scene` is a Python package for working with Autodesk Maya scene files (`.mb` and `.ma`) without Maya.
 
+<center><strong><a href="https://Pouf.github.io/py-maya-scene/">Explore the docs »</a></strong></center>
+
 Sibling project of [py-aep](https://github.com/forticheprod/py-aep), [py-premiere](https://github.com/Pouf/py-premiere) and [py-houdini](https://github.com/Pouf/py-houdini).
 
 ## About
@@ -70,4 +72,4 @@ scene.save("asset_renamed.ma")
 
 ## Documentation
 
-See [docs/file_format.md](docs/file_format.md) for what is known of the `.mb` and `.ma` formats.
+See the [documentation](https://Pouf.github.io/py-maya-scene/), and its [File Format](https://Pouf.github.io/py-maya-scene/file_format/) page for what is known of the `.mb` and `.ma` formats.
