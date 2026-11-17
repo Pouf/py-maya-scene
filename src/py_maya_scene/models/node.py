@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from ..resolvers.attribute_names import short_attribute_name
 from .rename import rename_node
 
 if TYPE_CHECKING:
@@ -229,9 +230,15 @@ class Node:
         return [Attribute(r, self) for r in self._record.string_attributes()]
 
     def attr(self, name: str) -> Attribute:
-        """The stored attribute named `name` (as stored, e.g. `ftn` or `uvst[0].uvsn`)."""
+        """The stored attribute named `name`, by short or long name (`ftn`,
+        `fileTextureName`, `uvst[0].uvsn`, `uvSet[0].uvSetName`).
+
+        Attributes missing from Maya's schema, `addAttr` ones included, match
+        their stored name only.
+        """
+        short_name = short_attribute_name(self.type, name)
         for attribute in self.attributes:
-            if attribute.name == name:
+            if attribute.name == short_name:
                 return attribute
         raise KeyError(f"{self.name} stores no value for {name!r}")
 
