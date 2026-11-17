@@ -14,6 +14,7 @@ from py_maya_scene.binary.scene_chunks import ReferenceEdit
 from py_maya_scene.data.node_types import DEFAULT_NODES
 from py_maya_scene.metadata import ContentTable, path_crc
 from py_maya_scene.models import Dependency, Scene
+from py_maya_scene.resolvers.attribute_names import short_attribute_name
 from py_maya_scene.storage.base import file_type_for
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
@@ -108,6 +109,9 @@ def test_deps_fixture(ext: str) -> None:
     assert {p.name for p in scene.plugins} == {"AbcImport", "mtoa", "gpuCache"}
     texture = scene.node("unicodeTex").attr("ftn")
     assert texture.value == "P:/projets/d\u00e9mo/textures/\u00e9toile.png"
+    assert scene.node("unicodeTex").attr("fileTextureName").name == "ftn"
+    uv_set = scene.node("mySphereShape").attr("uvSet[0].uvSetName")
+    assert (uv_set.name, uv_set.value) == ("uvst[0].uvsn", "map1")
     assert scene.node("transform1").path == "|transform1"
     gpu = scene.node("gpuCache1")
     assert (gpu.type, gpu.path, gpu.is_dag) == (
@@ -115,6 +119,14 @@ def test_deps_fixture(ext: str) -> None:
         "|transform1|gpuCache1",
         True,
     )
+    assert gpu.attr("cacheFileName").value == "P:/cache/anim_gpu.abc"
+
+
+def test_short_attribute_names() -> None:
+    assert short_attribute_name("transform", "visibility") == "v"
+    # `rot` is useRotate in Maya 2022 and rotateWeight in Maya 2024
+    assert short_attribute_name("blendMatrix", "useRotate") == "useRotate"
+    assert short_attribute_name("blendMatrix", "rotateWeight") == "rotateWeight"
 
 
 def _sequences(scene: Scene) -> dict[str, bool]:

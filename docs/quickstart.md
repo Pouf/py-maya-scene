@@ -24,6 +24,7 @@ for node in scene.nodes:
 node = scene.node("diffuseTex")  # a unique short name, or a DAG path
 for attribute in node.attributes:
     print(f"  {attribute.name} [{attribute.type}] = {attribute.value!r}")
+print(node.attr("fileTextureName").value)  # a short or long name
 ```
 
 Strings (`STR`), string arrays (`STR#`) and reference edits (`REFE`) are
