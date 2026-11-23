@@ -98,11 +98,65 @@ def encode_string_array(texts: list[str]) -> bytes:
 
 
 class AddedAttribute(NamedTuple):
-    """`ATTR`: an attribute the file adds to its node with `addAttr`."""
+    """`ATTR`: an attribute the file adds to its node with `addAttr`.
+
+    `kind` names the value kind as attribute specs do (`double`, `linear`,
+    `double3`, `string`...), `parent` is the parent's long name, `default`
+    is in internal units, None when the file stores none.
+    """
 
     long_name: str
     short_name: str
     used_as_filename: bool
+    kind: str = "double"
+    parent: str | None = None
+    multi: bool = False
+    keyable: bool = False
+    storable: bool = True
+    default: float | None = None
+
+
+# Value kind by `ATTR` type code, and by value tag for `aTYP` (`addAttr -dt`)
+ADDED_ATTRIBUTE_KINDS = {
+    b"aBOL": "bool",
+    b"aBYT": "byte",
+    b"aCHR": "char",
+    b"aSI1": "short",
+    b"aLI1": "long",
+    b"aFLT": "float",
+    b"aDBL": "double",
+    b"aAGL": "angle",
+    b"aLNR": "linear",
+    b"aTIM": "time",
+    b"aENM": "enum",
+    b"aMSG": "message",
+    b"aMTX": "matrix",
+    b"aFMX": "fltMatrix",
+    b"aFL2": "float2",
+    b"aDB2": "double2",
+    b"aLI2": "long2",
+    b"aSI2": "short2",
+    b"aFL3": "float3",
+    b"aDB3": "double3",
+    b"aLI3": "long3",
+    b"aSI3": "short3",
+    b"aDB4": "double4",
+    b"aCPD": "compound",
+}
+ADDED_DATA_KINDS = {
+    b"STR ": "string",
+    b"STR#": "stringArray",
+    b"MATR": "matrix",
+    b"DBL#": "doubleArray",
+    b"I32#": "Int32Array",
+    b"PNT#": "pointArray",
+    b"VEC#": "vectorArray",
+    b"MESH": "mesh",
+    b"NRBC": "nurbsCurve",
+    b"NRBS": "nurbsSurface",
+    b"CMP#": "componentList",
+    b"ATAL": "attributeAlias",
+}
 
 
 def decode_added_attribute(data: bytes) -> AddedAttribute:
@@ -111,7 +165,9 @@ def decode_added_attribute(data: bytes) -> AddedAttribute:
 
     Compounds (`aCPD`, and numeric codes ending in 2, 3 or 4 like `aDB3`)
     have a u32 count and that many 4-byte value tags, `aTIM` has two blocks,
-    other codes one. Bit `0x01` of flag byte 1 is `-usedAsFilename`.
+    other codes one. The fields after the names are, when their flag is set,
+    the nice name, the enum names, the parent, a u32, the minimum, maximum,
+    soft minimum and soft maximum, and `DBLE` with the default value.
     """
     code = data[:4]
     if code == b"aTIM":
@@ -120,12 +176,37 @@ def decode_added_attribute(data: bytes) -> AddedAttribute:
         start = 16 + 4 * _U32.unpack_from(data, 12)[0]
     else:
         start = 16
-    long_end = data.index(b"\x00", start)
-    short_end = data.index(b"\x00", long_end + 1)
+    if code == b"aTYP":
+        kind = ADDED_DATA_KINDS.get(data[12:16], "data")
+    else:
+        kind = ADDED_ATTRIBUTE_KINDS.get(code, "other")
+    flags = data[5:8]
+    cursor = _Cursor(data)
+    cursor.pos = start
+    long_name, short_name = cursor.string(), cursor.string()
+    if flags[1] & 0x80:
+        cursor.string()  # nice name
+    if code == b"aENM":
+        cursor.string()  # enum names
+    parent = cursor.string() if flags[2] & 0x20 else None
+    # A u32, then the minimum, maximum, soft minimum and soft maximum
+    cursor.pos += 4
+    for present in (flags[2] & 0x02, flags[2] & 0x04, flags[1] & 0x08, flags[1] & 0x10):
+        if present:
+            cursor.pos += 8
+    default = None
+    if flags[2] & 0x08 and data[cursor.pos : cursor.pos + 4] == b"DBLE":
+        default = float(_DOUBLE.unpack_from(data, cursor.pos + 4)[0])
     return AddedAttribute(
-        decode_text(data[start:long_end]),
-        decode_text(data[long_end + 1 : short_end]),
-        bool(data[5] & 0x01),
+        long_name,
+        short_name,
+        bool(flags[0] & 0x01),
+        kind,
+        parent,
+        bool(flags[2] & 0x01),
+        bool(flags[1] & 0x40),
+        bool(flags[0] & 0x20),
+        default,
     )
 
 
