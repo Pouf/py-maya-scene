@@ -1,68 +1,19 @@
-"""Nodes and their stored attribute values."""
+"""Nodes and their attributes."""
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from ..resolvers.attribute_names import short_attribute_name
 from ..resolvers.attribute_specs import added_attribute_specs, attribute_specs
-from .plug import Plug, full_path, parse_path
+from .attribute import Attribute, attribute_path, full_path, parse_path, path_name
 from .rename import rename_node
 
 if TYPE_CHECKING:
     from ..resolvers.attribute_specs import AttributeSpec
-    from ..storage.base import AttributeRecord, AttributeValue, NodeRecord
-    from .plug import Component
+    from ..storage.base import AttributeRecord, NodeRecord
+    from .attribute import Component
     from .scene import Scene
-
-_INDEX = re.compile(r"\[[^\]]*\]")
-
-
-def leaf_name(attribute: str) -> str:
-    """The attribute itself, without indices or parents (`uvst[0].uvsn` > `uvsn`)."""
-    return _INDEX.sub("", attribute).split(".")[-1]
-
-
-class Attribute:
-    """An attribute value stored on a node.
-
-    `value` decodes the storage types py_maya_scene understands so far: strings
-    (`STR`), string arrays (`STR#`) and reference edits (`REFE`).
-    """
-
-    def __init__(self, _record: AttributeRecord, node: Node) -> None:
-        self._record = _record
-        self.node = node
-
-    @property
-    def name(self) -> str:
-        """Name as stored: short name, with indices and parents (`uvst[0].uvsn`)."""
-        return self._record.name
-
-    @property
-    def leaf_name(self) -> str:
-        """Short name of the attribute itself, without indices or parents."""
-        return leaf_name(self.name)
-
-    @property
-    def type(self) -> str:
-        """Storage type: `STR`, `STR#`, `REFE`, else the format's own name for it."""
-        return self._record.type
-
-    @property
-    def value(self) -> AttributeValue:
-        return self._record.get_value()
-
-    @value.setter
-    def value(self, value: AttributeValue) -> None:
-        if isinstance(value, list) and not all(isinstance(v, str) for v in value):
-            raise TypeError("a string array value must be a list of str")
-        self.node.scene._before_edit()
-        self._record.set_value(value)
-
-    def __repr__(self) -> str:
-        return f"Attribute({self.node.name}.{self.name}, {self.type})"
 
 
 class Node:
@@ -233,22 +184,30 @@ class Node:
 
     @property
     def attributes(self) -> list[Attribute]:
-        return [Attribute(r, self) for r in self._record.attributes()]
-
-    def _string_attributes(self) -> list[Attribute]:
-        return [Attribute(r, self) for r in self._record.string_attributes()]
+        """The attributes the file stores a value or flags for, in file order.
+        A multi and a numeric compound come once, whichever elements or
+        children the file stores."""
+        specs = self._specs()
+        names: dict[str, None] = {}
+        for record in self._record.attributes():
+            try:
+                path = full_path(parse_path(record.name), specs)
+            except ValueError:  # a name no attribute can have
+                continue
+            names[path_name(attribute_path(path, specs))] = None
+        return [Attribute(self, name) for name in names]
 
     def _record_paths(
         self, attribute: str
     ) -> list[tuple[AttributeRecord, list[Component]]]:
         """The records whose full path starts with `attribute`, with that path,
-        in file order. Parsed once, since plugs read them for every value."""
+        in file order. Parsed once, since attributes read them for every value."""
         if not self._paths_read:
             specs = self._specs()
             for record in self._record.attributes():
                 try:
                     path = full_path(parse_path(record.name), specs)
-                except ValueError:  # a name no plug can have
+                except ValueError:  # a name no attribute can have
                     continue
                 self._paths_cache.setdefault(path[0][0], []).append((record, path))
             self._paths_read = True
@@ -270,28 +229,16 @@ class Node:
         return self._spec_cache
 
     def attr(self, name: str) -> Attribute:
-        """The stored attribute named `name`, by short or long name (`ftn`,
-        `fileTextureName`, `uvst[0].uvsn`, `uvSet[0].uvSetName`).
+        """The attribute named `name`, by short or long names with indices
+        (`tx`, `translate`, `pnts[3]`, `uvSet[0].uvSetName`), with the value
+        and flags the file gives it.
 
         Long names come from Maya's schema and from the node's `addAttr`
-        records. Attributes of node types the schema misses match their
+        records. Attributes of node types the schema misses go by their
         stored name only.
         """
-        short_name = self._short_name(name)
-        for attribute in self.attributes:
-            if attribute.name == short_name:
-                return attribute
-        raise KeyError(f"{self.name} stores no value for {name!r}")
-
-    def _short_name(self, name: str) -> str:
         self._specs()  # reads the added attribute names once
-        return short_attribute_name(self.type, name, self._added_names)
-
-    def plug(self, name: str) -> Plug:
-        """The plug named `name`, by short or long attribute names with indices
-        (`tx`, `translate`, `pnts[3]`), with the value and flags the file gives
-        it. Unlike `attr`, it reads across every record that sets the plug."""
-        return Plug(self, self._short_name(name))
+        return Attribute(self, short_attribute_name(self.type, name, self._added_names))
 
     def __repr__(self) -> str:
         return f"Node({self.path!r}, {self.type!r})"

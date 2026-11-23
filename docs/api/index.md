@@ -18,8 +18,7 @@ The `Scene` parsed from a `.mb` or `.ma` file: version, plugins, references, nod
 What the file creates or edits:
 
 - [Node](node.md) - A node, with its name, type, UUID and DAG paths
-- [Attribute](attribute.md) - A value stored on a node, record by record
-- [Plug](plug.md) - The value and flags of one attribute, like `getAttr`, in the scene's units
+- [Attribute](attribute.md) - The value and flags of one attribute, like `getAttr`, in the scene's units
 
 ### References
 

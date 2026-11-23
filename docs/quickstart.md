@@ -22,33 +22,31 @@ for node in scene.nodes:
     print(f"{node.path} ({node.type})")
 
 node = scene.node("diffuseTex")  # a unique short name, or a DAG path
-for attribute in node.attributes:
-    print(f"  {attribute.name} [{attribute.type}] = {attribute.value!r}")
+for attribute in node.attributes:  # the attributes the file stores
+    print(f"  {attribute.name} = {attribute.value!r}")
 print(node.attr("fileTextureName").value)  # a short or long name
 ```
 
-An `Attribute` is one record of the file. Strings (`STR`), string arrays
-(`STR#`) and reference edits (`REFE`) are decoded there.
-
 ## Read and set values
 
-A plug reads every record that sets an attribute, like `getAttr`, in the
-scene's units:
+An attribute reads every record that sets it, like `getAttr`, in the scene's
+units:
 
 ```python
 print(scene.units)  # Units(linear='cm', angle='deg', time='film')
 transform = scene.node("box")
-print(transform.plug("translate").value)  # (0.0, 2.5, 0.0)
-print(transform.plug("tx").locked, transform.plug("tx").keyable)
+print(transform.attr("translate").value)  # (0.0, 2.5, 0.0)
+print(transform.attr("tx").locked, transform.attr("tx").keyable)
 
-transform.plug("rotateY").value = 45  # degrees, if the scene is in degrees
-transform.plug("translate").locked = True
+transform.attr("rotateY").value = 45  # degrees, if the scene is in degrees
+transform.attr("translate").locked = True
 scene.save("box_edited.mb")
 ```
 
-Values the file does not store read as the attribute's default. A plug
-driven by a connection or an animation curve gives its stored static value,
-and setting a locked or connected plug raises `ValueError`, as in Maya.
+Values the file does not store read as the attribute's default. An
+attribute driven by a connection or an animation curve gives its stored
+static value, and setting a locked or connected attribute raises
+`ValueError`, as in Maya.
 
 ## Inspect references
 

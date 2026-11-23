@@ -63,7 +63,7 @@ Scene
 
 - `Scene`: a `.mb` or `.ma` file: version, file info, plugins, references, nodes, connections
 - `Node`: a node the file creates, or a default node it edits (name, type, UUID, DAG paths)
-- `Attribute`: a value stored on a node; strings, string arrays and reference edits are decoded
+- `Attribute`: the value and flags of one attribute of a node, like `getAttr`, in the scene's units
 - `Reference`: a reference to another scene file, at any depth
 - `ReferenceEdits`, `ReferenceEdit`: the edits a file makes to referenced nodes
 - `Connection`: a `connectAttr` stored in the file

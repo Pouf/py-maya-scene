@@ -237,7 +237,8 @@ def test_reference_edits_round_trip(path: Path, tmp_path: Path) -> None:
 @pytest.mark.parametrize("ext", FORMATS)
 def test_reference_edit_kinds(ext: str) -> None:
     scene = py_maya_scene.parse(SAMPLES / "maya2024" / f"refedits.{ext}")
-    ((_, edits),) = scene.reference_edits()
+    ((attribute, edits),) = scene.reference_edits()
+    assert (attribute.name, scene.node("eRN").attr("ed").value) == ("ed", edits)
     (first,), ((node, node_edits),) = edits.sections
     assert first == ("eRN", []) and node == "eRN"
     kinds = [e.kind for e in node_edits if "uvSet" not in e.strings[1]]
