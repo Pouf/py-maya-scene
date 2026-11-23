@@ -58,7 +58,35 @@ _LONG_FLAGS = {
     "-l": ("-linear", "-lock"),
     "-a": ("-angle",),
     "-t": ("-time",),
+    "-at": ("-attributeType",),
+    "-dt": ("-dataType",),
+    "-dv": ("-defaultValue",),
+    "-k": ("-keyable",),
+    "-m": ("-multi",),
+    "-s": ("-storable", "-size"),
 }
+# Value kind of `addAttr -at` and `-dt` types, named as in attribute specs
+_ADDED_KINDS = {
+    name: name
+    for name in (
+        "bool byte char short long float double time enum message matrix "
+        "fltMatrix float2 float3 double2 double3 double4 long2 long3 short2 "
+        "short3 compound string stringArray doubleArray Int32Array pointArray "
+        "vectorArray mesh nurbsCurve nurbsSurface componentList attributeAlias"
+    ).split()
+}
+_ADDED_KINDS.update(
+    {
+        "doubleLinear": "linear",
+        "floatLinear": "flinear",
+        "doubleAngle": "angle",
+        "floatAngle": "fangle",
+        "reflectance": "float3",
+        "spectrum": "float3",
+        "reflectanceRGB": "float3",
+        "spectrumRGB": "float3",
+    }
+)
 
 
 def _is_flag(token: Token, flag: str) -> bool:
@@ -72,6 +100,12 @@ def _flag_value(tokens: list[Token], flag: str) -> int | None:
         if _is_flag(token, flag):
             return position + 1
     return None
+
+
+def _flag_text(document: Document, tokens: list[Token], flag: str) -> str | None:
+    """The text of the value after `flag`, or None."""
+    position = _flag_value(tokens, flag)
+    return None if position is None else _read(document, tokens[position].text)
 
 
 def _has_flag(document: Document, index: int, flag: str) -> bool:
@@ -362,19 +396,40 @@ class MaNode(NodeRecord):
         ]
 
     def added_attributes(self) -> list[AddedAttribute]:
+        document = self._document
         found = []
         for index in range(self._index + 1, self._end):
-            if self._document.command(index) != "addAttr":
+            if document.command(index) != "addAttr":
                 continue
-            tokens = self._document.tokens(index)
+            tokens = document.tokens(index)
             names = []
             for flag in ("-ln", "-sn"):
-                position = _flag_value(tokens, flag)
-                if position is not None:
-                    names.append(_read(self._document, tokens[position].text))
-            used_as_filename = any(_is_flag(t, "-uaf") for t in tokens)
+                text = _flag_text(document, tokens, flag)
+                if text is not None:
+                    names.append(text)
+            data_type = _flag_text(document, tokens, "-dt")
+            if data_type is not None:
+                kind = _ADDED_KINDS.get(data_type, "data")
+            else:
+                attribute_type = _flag_text(document, tokens, "-at") or "double"
+                kind = _ADDED_KINDS.get(attribute_type, "other")
+            default = _flag_text(document, tokens, "-dv")
+            keyable = _flag_text(document, tokens, "-k")
+            storable = _flag_text(document, tokens, "-s")
             # Maya writes both names, a script may write one for both
-            found.append(AddedAttribute(names[0], names[-1], used_as_filename))
+            found.append(
+                AddedAttribute(
+                    names[0],
+                    names[-1],
+                    any(_is_flag(t, "-uaf") for t in tokens),
+                    kind,
+                    _flag_text(document, tokens, "-p"),
+                    any(_is_flag(t, "-m") for t in tokens),
+                    keyable is not None and bool(number(keyable)),
+                    storable is None or bool(number(storable)),
+                    None if default is None else number(default),
+                )
+            )
         return found
 
 

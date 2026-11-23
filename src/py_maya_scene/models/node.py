@@ -6,9 +6,11 @@ import re
 from typing import TYPE_CHECKING
 
 from ..resolvers.attribute_names import short_attribute_name
+from ..resolvers.attribute_specs import added_attribute_specs, attribute_specs
 from .rename import rename_node
 
 if TYPE_CHECKING:
+    from ..resolvers.attribute_specs import AttributeSpec
     from ..storage.base import AttributeRecord, AttributeValue, NodeRecord
     from .scene import Scene
 
@@ -67,6 +69,7 @@ class Node:
     def __init__(self, _record: NodeRecord, scene: Scene) -> None:
         self._record = _record
         self.scene = scene
+        self._spec_cache: dict[str, AttributeSpec] | None = None
 
     @property
     def is_default(self) -> bool:
@@ -228,6 +231,14 @@ class Node:
 
     def _string_attributes(self) -> list[Attribute]:
         return [Attribute(r, self) for r in self._record.string_attributes()]
+
+    def _specs(self) -> dict[str, AttributeSpec]:
+        """Specs of the node's attributes by short name, added ones included."""
+        if self._spec_cache is None:
+            specs = dict(attribute_specs(self.type))
+            specs.update(added_attribute_specs(self._record.added_attributes()))
+            self._spec_cache = specs
+        return self._spec_cache
 
     def attr(self, name: str) -> Attribute:
         """The stored attribute named `name`, by short or long name (`ftn`,

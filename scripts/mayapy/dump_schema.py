@@ -47,13 +47,19 @@ for plugin in PLUGINS:
         pass
 
 
-def enum_names(cls):
-    return {getattr(cls, n): n for n in dir(cls) if n.startswith("k")}
+def enum_names(cls, names):
+    """Value > name of the enum constants `names`, by name: function set
+    classes also inherit the constants of their base classes."""
+    return {getattr(cls, n): n for n in names if hasattr(cls, n)}
 
 
-NUMERIC_TYPES = enum_names(om.MFnNumericData)
-UNIT_TYPES = enum_names(om.MFnUnitAttribute)
-DATA_TYPES = enum_names(om.MFnData)
+NUMERIC_TYPES = enum_names(
+    om.MFnNumericData,
+    "kBoolean kByte kChar kShort k2Short k3Short kLong k2Long k3Long kInt64 "
+    "kFloat k2Float k3Float kDouble k2Double k3Double k4Double kAddr".split(),
+)
+UNIT_TYPES = enum_names(om.MFnUnitAttribute, ["kAngle", "kDistance", "kTime"])
+DATA_TYPES = enum_names(om.MFnData, [n for n in vars(om.MFnData) if n.startswith("k")])
 
 
 def plain(value):
