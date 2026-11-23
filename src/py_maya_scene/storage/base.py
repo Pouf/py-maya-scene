@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Callable, List, NamedTuple, Union
 
 from ..binary.scene_chunks import AddedAttribute, ReferenceEdits
+from ..units import Units
 
 AttributeValue = Union[str, List[str], ReferenceEdits]
 
@@ -227,6 +228,11 @@ class SceneStorage(ABC):
     @property
     @abstractmethod
     def version(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def units(self) -> Units:
+        """Linear, angle and time units, Maya's defaults when the file names none."""
 
     @property
     @abstractmethod

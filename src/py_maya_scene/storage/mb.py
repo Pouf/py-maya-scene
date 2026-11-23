@@ -49,6 +49,7 @@ from ..binary.scene_chunks import (
 )
 from ..data.node_types import DEFAULT_NODES, TYPE_NAMES
 from ..metadata import CODEPAGE
+from ..units import Units
 from .base import (
     AttributeRecord,
     AttributeValue,
@@ -379,6 +380,15 @@ class MbScene(SceneStorage):
     @property
     def version(self) -> str:
         return decode_text(self._header_chunks(b"VERS")[0].data)
+
+    @property
+    def units(self) -> Units:
+        names = {}
+        for tag, field in ((b"LUNI", "linear"), (b"AUNI", "angle"), (b"TUNI", "time")):
+            chunks = self._header_chunks(tag)
+            if chunks:
+                names[field] = decode_text(chunks[0].data)
+        return Units(**names)
 
     @property
     def file_info(self) -> dict[str, str]:

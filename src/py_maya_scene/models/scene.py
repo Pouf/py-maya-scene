@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from typing import Callable, Iterable, Mapping
 
     from ..storage.base import Plugin, SceneStorage
+    from ..units import Units
 
     ExtraAttributes = Mapping[str, Iterable[str]]
 
@@ -152,6 +153,11 @@ class Scene:
     def version(self) -> str:
         """Maya version that saved the file (`2022`, `2018ff09` for Maya 2019)."""
         return self._storage.version
+
+    @property
+    def units(self) -> Units:
+        """Linear, angle and time units (`currentUnit`), by short name."""
+        return self._storage.units
 
     @property
     def file_info(self) -> dict[str, str]:
