@@ -9,7 +9,8 @@ Each scene is saved as both .mb and .ma so every binary chunk has a text twin.
 References use `$PY_MAYA_SAMPLES`, but Maya also stores their resolved path:
 run the script through a neutral path (`mklink /J C:\\py-maya-scene <this
 repository>`, then `mayapy C:/py-maya-scene/scripts/mayapy/make_fixtures.py`).
-The run stops if a saved file holds the home folder.
+The run stops if a saved file holds the home folder. Scene names given as
+arguments limit the files written to those scenes (`... make_fixtures.py units`).
 """
 
 from __future__ import print_function, unicode_literals
@@ -36,9 +37,12 @@ if not os.path.isdir(LOG_DIR):
 log = io.open(
     os.path.join(LOG_DIR, "make_fixtures_%s.log" % VERSION), "w", encoding="utf-8"
 )
+ONLY = set(sys.argv[1:])
 
 
 def save(name):
+    if ONLY and name not in ONLY:
+        return
     for ext, kind in ((".mb", "mayaBinary"), (".ma", "mayaAscii")):
         path = os.path.join(OUT, name + ext)
         cmds.file(rename=path)
@@ -249,6 +253,95 @@ cmds.parent(
     cmds.instance(hero, name="heroInstance")[0], cmds.group(empty=True, name="copies")
 )
 save("instances")
+
+# units: values and flags of every kind, in metres, degrees and ntsc so that
+# .mb (centimetres, radians, ticks) and .ma (scene units) differ
+cmds.file(new=True, force=True)
+cmds.currentUnit(linear="m", angle="deg", time="ntsc")
+values = cmds.createNode("transform", name="values")
+cmds.setAttr(values + ".t", 1, 2, 3)
+cmds.setAttr(values + ".r", 10, 20, 30)
+cmds.setAttr(values + ".s", 1, 2, 0.5)
+cmds.setAttr(values + ".ro", 2)
+cmds.setAttr(values + ".it", False)
+locks = cmds.createNode("transform", name="locks")
+cmds.setAttr(locks + ".t", 4, 5, 6)
+cmds.setAttr(locks + ".t", lock=True)
+cmds.setAttr(locks + ".rx", lock=True)
+cmds.setAttr(locks + ".rz", keyable=False)
+cmds.setAttr(locks + ".rz", channelBox=True)
+cmds.setAttr(locks + ".ro", keyable=True)
+cmds.setAttr(locks + ".v", keyable=False)
+color = cmds.createNode("transform", name="color")
+cmds.setAttr(color + ".ove", True)
+cmds.setAttr(color + ".ovrgbf", True)
+cmds.setAttr(color + ".ovrgb", 1, 0.5, 0)
+# More than 250 elements: .ma splits the range
+cmds.polyPlane(name="range", sx=20, sy=20, ch=False)
+for i in range(300):
+    cmds.setAttr("rangeShape.pt[%d]" % i, 0, 0.01 * i, 0)
+anim = cmds.createNode("transform", name="anim")
+cmds.setKeyframe(anim, attribute="tx", time=1, value=1)
+cmds.setKeyframe(anim, attribute="tx", time=30, value=2)
+cmds.setKeyframe(anim, attribute="rx", time=15, value=90)
+cmds.setKeyframe(anim, attribute="sx", time=10, value=3)
+added = cmds.createNode("transform", name="added")
+cmds.addAttr(
+    added, longName="distance", shortName="dst", attributeType="doubleLinear", dv=3
+)
+cmds.setAttr(added + ".dst", 0.5)
+cmds.addAttr(added, longName="angle", shortName="ang", attributeType="doubleAngle")
+cmds.setAttr(added + ".ang", 45)
+cmds.addAttr(added, longName="moment", shortName="mmt", attributeType="time")
+cmds.setKeyframe(added, attribute="mmt", time=1, value=5)
+cmds.setKeyframe(added, attribute="mmt", time=10, value=20)
+cmds.addAttr(added, longName="position", shortName="pos", attributeType="double3")
+for axis in "XYZ":
+    cmds.addAttr(
+        added,
+        longName="position" + axis,
+        shortName="pos" + axis,
+        attributeType="doubleLinear",
+        parent="position",
+    )
+cmds.setAttr(added + ".pos", 1, 2, 3)
+cmds.addAttr(added, longName="cells", shortName="cls", attributeType="long2")
+for axis in "XY":
+    cmds.addAttr(
+        added,
+        longName="cells" + axis,
+        shortName="cls" + axis,
+        attributeType="long",
+        parent="cells",
+    )
+cmds.setAttr(added + ".cls", 4, -5)
+matrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1]
+cmds.addAttr(added, longName="dataMatrix", shortName="dmx", dataType="matrix")
+cmds.setAttr(added + ".dmx", matrix, type="matrix")
+cmds.addAttr(added, longName="attrMatrix", shortName="amx", attributeType="matrix")
+cmds.setAttr(added + ".amx", matrix, type="matrix")
+cmds.addAttr(added, longName="doubles", shortName="dbs", dataType="doubleArray")
+cmds.setAttr(added + ".dbs", [1.5, 2.5], type="doubleArray")
+cmds.addAttr(added, longName="ints", shortName="ins", dataType="Int32Array")
+cmds.setAttr(added + ".ins", [1, -2, 3], type="Int32Array")
+cmds.addAttr(added, longName="points", shortName="pts", dataType="pointArray")
+cmds.setAttr(added + ".pts", 2, (1, 2, 3, 1), (4, 5, 6, 1), type="pointArray")
+cmds.addAttr(added, longName="vectors", shortName="vcs", dataType="vectorArray")
+cmds.setAttr(added + ".vcs", 2, (1, 2, 3), (4, 5, 6), type="vectorArray")
+cmds.addAttr(added, longName="sparse", shortName="spr", attributeType="double", m=True)
+cmds.setAttr(added + ".spr[0]", 1)
+cmds.setAttr(added + ".spr[5]", 2)
+sequence = cmds.shadingNode("file", asTexture=True, name="sequence")
+cmds.setAttr(sequence + ".fe", 12)
+cmds.setAttr(sequence + ".ufe", True)
+posed = cmds.createNode("transform", name="posed")
+cmds.setAttr(posed + ".t", 1, 2, 3)
+cmds.setAttr(posed + ".r", 10, 20, 30)
+cmds.setAttr(posed + ".rp", 1, 1, 1)
+cmds.dagPose(posed, save=True, name="posedPose")
+cmds.setAttr("defaultResolution.w", 1280)
+cmds.currentTime(7.5)
+save("units")
 
 
 # Maya's own renames of the scenes above: what py_maya_scene's renames must match

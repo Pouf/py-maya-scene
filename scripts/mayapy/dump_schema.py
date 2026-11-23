@@ -5,7 +5,10 @@
 
 For each node type: its 4-byte type id (the form type of its `.mb` group),
 its parent types, and the attributes it declares (those its parent type does
-not have) as [long name, short name, API type, usedAsFilename, array, parent].
+not have) as [long name, short name, API type, usedAsFilename, array, parent,
+details]. Details hold the numeric, unit or data type name, the default in
+internal units (centimetres, radians, seconds), the keyable, channelBox,
+storable and hidden flags, and the children of compounds.
 Plugins that are installed are loaded first so their node types are included.
 """
 
@@ -44,6 +47,72 @@ for plugin in PLUGINS:
         pass
 
 
+def enum_names(cls):
+    return {getattr(cls, n): n for n in dir(cls) if n.startswith("k")}
+
+
+NUMERIC_TYPES = enum_names(om.MFnNumericData)
+UNIT_TYPES = enum_names(om.MFnUnitAttribute)
+DATA_TYPES = enum_names(om.MFnData)
+
+
+def plain(value):
+    if isinstance(value, (list, tuple)):
+        return [plain(v) for v in value]
+    if isinstance(value, om.MDistance):
+        return value.asCentimeters()
+    if isinstance(value, om.MAngle):
+        return value.asRadians()
+    if isinstance(value, om.MTime):
+        return value.asUnits(om.MTime.kSeconds)
+    return value
+
+
+def instance_default(node_type, short_name):
+    """Default read from a created node, for attributes whose default the
+    attribute function set does not give (float distances and angles)."""
+    node = cmds.createNode(node_type, skipSelect=True)
+    try:
+        plug = om.MSelectionList().add(node + "." + short_name).getPlug(0)
+        return plug.asDouble()
+    finally:
+        cmds.delete(node)
+
+
+def details(node_type, obj, fn):
+    out = {
+        "keyable": fn.keyable,
+        "channelBox": fn.channelBox,
+        "storable": fn.storable,
+        "hidden": fn.hidden,
+    }
+    try:
+        if obj.hasFn(om.MFn.kNumericAttribute):
+            numeric = om.MFnNumericAttribute(obj)
+            out["numeric"] = NUMERIC_TYPES.get(numeric.numericType())
+            out["default"] = plain(numeric.default)
+        elif obj.hasFn(om.MFn.kUnitAttribute):
+            unit = om.MFnUnitAttribute(obj)
+            out["unit"] = UNIT_TYPES.get(unit.unitType())
+            try:
+                out["default"] = plain(unit.default)
+            except RuntimeError:  # float units: read from a node instead
+                out["default"] = instance_default(node_type, fn.shortName)
+        elif obj.hasFn(om.MFn.kEnumAttribute):
+            out["default"] = om.MFnEnumAttribute(obj).default
+        elif obj.hasFn(om.MFn.kTypedAttribute):
+            out["data"] = DATA_TYPES.get(om.MFnTypedAttribute(obj).attrType())
+        if obj.hasFn(om.MFn.kCompoundAttribute):
+            compound = om.MFnCompoundAttribute(obj)
+            out["children"] = [
+                om.MFnAttribute(compound.child(i)).shortName
+                for i in range(compound.numChildren())
+            ]
+    except RuntimeError as e:  # abstract types cannot be created
+        out["error"] = str(e)
+    return out
+
+
 def attributes(node_type):
     out = {}
     for obj in om.MNodeClass(node_type).getAttributes():
@@ -56,6 +125,7 @@ def attributes(node_type):
             fn.usedAsFilename,
             fn.array,
             parent,
+            details(node_type, obj, fn),
         ]
     return out
 
