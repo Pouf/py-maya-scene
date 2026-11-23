@@ -71,7 +71,12 @@ API_KINDS = {
     "kFloatMatrixAttribute": "fltMatrix",
     "kCompoundAttribute": "compound",
 }
-FLAGS = (("k", "keyable"), ("c", "channelBox"), ("s", "storable"))
+FLAGS = (
+    ("k", "keyable"),
+    ("c", "channelBox"),
+    ("s", "storable"),
+    ("i", "internal"),
+)
 
 
 def kind_of(api_type: str, details: dict[str, Any]) -> str:
@@ -82,20 +87,46 @@ def kind_of(api_type: str, details: dict[str, Any]) -> str:
     return API_KINDS.get(api_type, "other")
 
 
+def add_creation_values(
+    specs: dict[str, dict[str, list[Any]]], parents: dict[str, str], dump: Path
+) -> None:
+    """Give a type whose new nodes start off an inherited default an entry
+    of its own with that value (`<dump>_creation.jsonl`, `dump_schema.py`)."""
+    creation_path = dump.with_name(dump.stem + "_creation.jsonl")
+    if not creation_path.exists():
+        return
+    for line in creation_path.read_text(encoding="ascii").splitlines():
+        entry = json.loads(line)
+        name = entry["type"]
+        for short_name, value in entry.get("values", {}).items():
+            current: str | None = name
+            while current is not None and short_name not in specs.get(current, {}):
+                current = parents.get(current)
+            if current is not None:
+                spec = list(specs[current][short_name])
+                spec[4] = value
+                specs.setdefault(name, {})[short_name] = spec
+
+
+def spec_text(attributes: dict[str, list[Any]]) -> str:
+    entries = [attributes[short] for short in sorted(attributes)]
+    return json.dumps(entries, separators=(",", ":"))
+
+
 def main(paths: list[str]) -> None:
     names: dict[int, str] = {}
     parents: dict[str, str] = {}
     file_attributes: dict[str, set[tuple[str, str]]] = {}
     short_names: dict[str, set[tuple[str, str]]] = {}
     default_nodes: dict[str, str] = {}
-    specs: dict[str, dict[str, list[Any]]] = {}
+    # Maya version > type name > short name > spec entry
+    specs_by_version: dict[str, dict[str, dict[str, list[Any]]]] = {}
     versions = []
-    spec_versions = []
     for path in paths:
         dump = json.loads(Path(path).read_text(encoding="ascii"))
         versions.append(dump["maya"].split()[0])
         declared = {n: i["attributes"] for n, i in dump["types"].items()}
-        has_details = False
+        specs: dict[str, dict[str, list[Any]]] = {}
         for name, info in dump["types"].items():
             names[int(info["id"], 16)] = name
             # Every link of the chain: some intermediate types (THsurfaceShape)
@@ -116,7 +147,6 @@ def main(paths: list[str]) -> None:
             for attribute in info["attributes"]:
                 if len(attribute) < 7:
                     continue
-                has_details = True
                 _, short_name, api_type, _, array, parent, details = attribute
                 flags = "a" if array else ""
                 for letter, key in FLAGS:
@@ -130,9 +160,24 @@ def main(paths: list[str]) -> None:
                     details.get("default"),
                     flags,
                 ]
-        if has_details:
-            spec_versions.append(versions[-1])
+        if specs:
+            add_creation_values(specs, parents, Path(path))
+            specs_by_version[versions[-1]] = specs
         default_nodes.update(dump["default_nodes"])
+
+    # The newest version's specs, then for each older one what differs
+    specs = {}
+    for version_specs in specs_by_version.values():
+        for name, attributes in version_specs.items():
+            specs.setdefault(name, {}).update(attributes)
+    spec_versions = list(specs_by_version)
+    changes: dict[str, dict[str, dict[str, list[Any]]]] = {}
+    for version in spec_versions[:-1]:
+        for name, attributes in specs_by_version[version].items():
+            for short_name, entry in attributes.items():
+                if specs[name][short_name] != entry:
+                    changed = changes.setdefault(version, {}).setdefault(name, {})
+                    changed[short_name] = entry
 
     attribute_names = []
     for name, pairs in sorted(short_names.items()):
@@ -207,19 +252,34 @@ def main(paths: list[str]) -> None:
         "",
         "# Type name > JSON list of the attributes it declares, as [short name, kind,",
         "# parent, children, default in internal units, flags], flags being `a`",
-        "# array, `k` keyable, `c` channel box and `s` storable. One string per type,",
-        "# parsed on first use",
+        "# array, `k` keyable, `c` channel box, `s` storable and `i` internal (the",
+        "# node keeps the value). Inherited attributes whose value a new node of the",
+        "# type starts with differs from the default are listed again with that",
+        "# value. One string per type, parsed on first use",
         "ATTRIBUTE_SPECS: dict[str, str] = {",
     ]
     count = 0
     for name, attributes in sorted(specs.items()):
-        entries = [attributes[short] for short in sorted(attributes)]
-        count += len(entries)
-        text = json.dumps(entries, separators=(",", ":"))
-        spec_lines.append(f"    {name!r}: {text!r},")
+        count += len(attributes)
+        spec_lines.append(f"    {name!r}: {spec_text(attributes)!r},")
+    spec_lines += [
+        "}",
+        "",
+        f"# Older Maya version > type name > the entries whose spec differs from Maya {spec_versions[-1]}'s",
+        "ATTRIBUTE_SPEC_CHANGES: dict[str, dict[str, str]] = {",
+    ]
+    changed = 0
+    for version, types in sorted(changes.items()):
+        spec_lines.append(f"    {version!r}: {{")
+        for name, attributes in sorted(types.items()):
+            changed += len(attributes)
+            spec_lines.append(f"        {name!r}: {spec_text(attributes)!r},")
+        spec_lines.append("    },")
     spec_lines += ["}", ""]
     SPECS_OUT.write_text("\n".join(spec_lines), encoding="utf-8")
-    print(f"wrote {SPECS_OUT} ({len(specs)} types, {count} attributes)")
+    print(
+        f"wrote {SPECS_OUT} ({len(specs)} types, {count} attributes, {changed} changed)"
+    )
 
 
 if __name__ == "__main__":

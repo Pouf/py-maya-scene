@@ -8,14 +8,17 @@ its parent types, and the attributes it declares (those its parent type does
 not have) as [long name, short name, API type, usedAsFilename, array, parent,
 details]. Details hold the numeric, unit or data type name, the default in
 internal units (centimetres, radians, seconds), the keyable, channelBox,
-storable and hidden flags, and the children of compounds.
-Plugins that are installed are loaded first so their node types are included.
+storable, hidden and internal flags, and the children of compounds. The
+values a new node starts with, where they are not the defaults, go to
+`maya<version>_creation.jsonl`. Plugins that are installed are loaded first
+so their node types are included.
 """
 
 from __future__ import print_function, unicode_literals
 
 import io
 import json
+import math
 import os
 import sys
 
@@ -79,10 +82,23 @@ def instance_default(node_type, short_name):
     attribute function set does not give (float distances and angles)."""
     node = cmds.createNode(node_type, skipSelect=True)
     try:
-        plug = om.MSelectionList().add(node + "." + short_name).getPlug(0)
-        return plug.asDouble()
+        selection = om.MSelectionList()
+        selection.add(node + "." + short_name)
+        return selection.getPlug(0).asDouble()
     finally:
         cmds.delete(node)
+
+
+def data_default(data):
+    """Default of a typed attribute. None when it has no default data, which
+    `getAttr` gives for an unset value, else a string, a matrix or a list."""
+    if data.isNull():
+        return None
+    if data.hasFn(om.MFn.kStringData):
+        return om.MFnStringData(data).string()
+    if data.hasFn(om.MFn.kMatrixData):
+        return list(om.MFnMatrixData(data).matrix())
+    return []
 
 
 def details(node_type, obj, fn):
@@ -91,6 +107,7 @@ def details(node_type, obj, fn):
         "channelBox": fn.channelBox,
         "storable": fn.storable,
         "hidden": fn.hidden,
+        "internal": fn.internal,
     }
     try:
         if obj.hasFn(om.MFn.kNumericAttribute):
@@ -107,7 +124,11 @@ def details(node_type, obj, fn):
         elif obj.hasFn(om.MFn.kEnumAttribute):
             out["default"] = om.MFnEnumAttribute(obj).default
         elif obj.hasFn(om.MFn.kTypedAttribute):
-            out["data"] = DATA_TYPES.get(om.MFnTypedAttribute(obj).attrType())
+            typed = om.MFnTypedAttribute(obj)
+            out["data"] = DATA_TYPES.get(typed.attrType())
+            out["default"] = data_default(typed.default)
+        elif obj.hasFn(om.MFn.kMatrixAttribute):
+            out["default"] = list(om.MFnMatrixAttribute(obj).default)
         if obj.hasFn(om.MFn.kCompoundAttribute):
             compound = om.MFnCompoundAttribute(obj)
             out["children"] = [
@@ -159,6 +180,58 @@ for name, info in types.items():
         v for k, v in all_attrs[name].items() if k not in inherited_attrs
     )
 
+
+def in_multi(fn):
+    """Whether the attribute or one of its parents is a multi."""
+    while True:
+        if fn.array:
+            return True
+        if fn.parent.isNull():
+            return False
+        fn = om.MFnAttribute(fn.parent)
+
+
+def creation_values(node_type):
+    """Values a new node of `node_type` starts with that are not the
+    attribute defaults, in internal units. A file leaves out what a new node
+    already has. Read in centimetres, degrees and film, a new scene's units."""
+    try:
+        node = cmds.createNode(node_type, skipSelect=True)
+    except RuntimeError as e:
+        return {"": str(e)}
+    found = {}
+    selection = om.MSelectionList()
+    selection.add(node)
+    node_fn = om.MFnDependencyNode(selection.getDependNode(0))
+    for i in range(node_fn.attributeCount()):
+        fn = om.MFnAttribute(node_fn.attribute(i))
+        if fn.name not in all_attrs[node_type] or fn.dynamic:
+            continue
+        defaults = all_attrs[node_type][fn.name][6]
+        # Single numbers only, booleans included
+        if (
+            not defaults["storable"]
+            or not isinstance(defaults.get("default"), (int, float))
+            or in_multi(fn)
+        ):
+            continue
+        try:
+            value = cmds.getAttr(node + "." + fn.shortName)
+        except (RuntimeError, ValueError, TypeError):  # no value to read
+            continue
+        if isinstance(value, (list, tuple)) or value is None:
+            continue
+        if defaults.get("unit") == "kAngle":
+            value = math.radians(value)
+        elif defaults.get("unit") == "kTime":
+            value = value / 24.0
+        if abs(float(value) - float(defaults["default"])) > 1e-9:
+            found[fn.shortName] = value
+    parents = cmds.listRelatives(node, parent=True) or []
+    cmds.delete(parents or node)
+    return found
+
+
 # Nodes every scene starts with; `.mb` select blocks name them without a type
 cmds.file(new=True, force=True)
 default_nodes = {n: cmds.nodeType(n) for n in cmds.ls()}
@@ -182,4 +255,37 @@ with io.open(path, "wb") as f:
         ).encode("ascii")
     )
 print("wrote", path, len(types), "types")
+
+# Creation values, one JSON line per type, written as they come. Creating
+# some node types crashes Maya, so a run resumes after the last type started
+# and skips it. Run the script again until it prints "creation values done".
+creation_path = path[: -len(".json")] + "_creation.jsonl"
+started = set()
+if os.path.exists(creation_path):
+    with io.open(creation_path, encoding="ascii") as f:
+        for line in f:
+            started.add(json.loads(line)["type"])
+with io.open(creation_path, "ab") as f:
+    # Plugin types last, most start with a capital. Creating some of them
+    # leaves Maya unable to create other nodes, new scenes or not
+    for name in sorted(types, key=lambda n: (n[:1].isupper(), n)):
+        if types[name]["abstract"] or name in started:
+            continue
+        f.write(json.dumps({"type": name}).encode("ascii") + b"\n")
+        f.flush()
+        # A new scene per type, since some plugin nodes leave a scene where
+        # later nodes fail to be created
+        cmds.file(new=True, force=True)
+        try:
+            values = creation_values(name)
+        except (RuntimeError, TypeError) as e:  # types that create no plain node
+            values = {"": str(e)}
+        if "" in values:
+            entry = {"type": name, "error": values[""]}
+        else:
+            entry = {"type": name, "values": values}
+        if values:
+            f.write(json.dumps(entry, sort_keys=True).encode("ascii") + b"\n")
+            f.flush()
+print("creation values done")
 maya.standalone.uninitialize()
