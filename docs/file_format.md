@@ -1,10 +1,12 @@
 # File Format
 
 What is known of Maya scene files, learned from files Maya writes: fixtures
-saved by Maya 2018, 2022 and 2024 (`samples/models/`), each scene saved as
-both `.mb` and `.ma`, and a read-only sweep of 4076 production files (771
-`.mb`, 3305 `.ma`). "Observed" marks rules seen in every file so far but not
-yet probed further.
+saved by Maya 2018, 2022, 2024 and 2025 (`samples/models/`), each scene saved
+as both `.mb` and `.ma`, and a read-only sweep of 4076 production files (771
+`.mb`, 3305 `.ma`). The attribute value layouts were also measured on probe
+scenes saved by Maya 2022, 2025 and 2027, one setting per variant, and on
+`.mb`/`.ma` twins that Maya 2022 saved from 4 production scenes. "Observed"
+marks rules seen in every file so far but not yet probed further.
 
 ## Maya Binary (`.mb`)
 
@@ -102,9 +104,10 @@ include the local nodes a referenced node was parented under
 node is stored twice: as a plain `CWFL` to the reference node's placeholder
 list (`aRN.phl[1]`) and as a kind 5 edit mapping the placeholder to the
 referenced plug. Parenting a local node under a referenced one creates a local
-`<refNode>fosterParent1` node and a kind 0 edit. Locking a node is not an
-edit. All 786 production `.mb` files decode with these rules and re-encode
-byte for byte (260k edits).
+`<refNode>fosterParent1` node and a kind 0 edit. The `.mb` and `.ma` twins
+of one scene, saved one after the other, store different UUIDs for that
+node. Locking a node is not an edit. All 786 production `.mb` files decode
+with these rules and re-encode byte for byte (260k edits).
 
 ### Nodes
 
@@ -128,6 +131,147 @@ Attribute chunks follow: the tag is the storage type, the data is
 (added attribute), `ATAL` (attribute alias). `DBLE` also stores booleans,
 integers, enums and times (as int64 ticks), so decoding a value needs the
 attribute's type.
+
+### Attribute flags
+
+The flag byte of an attribute chunk holds the `setAttr` flags of its `.ma`
+twin. Measured on 115k chunks of the probes and production twins:
+
+| Bit | Meaning | `.ma` |
+|---|---|---|
+| `0x01` | Locked | `-l on` |
+| `0x04` | Keyable | `-k on`, `-k off` |
+| `0x08` | A u32 count comes before the value | `-s <count>` |
+| `0x10` | Shown in the channel box | `-cb on` |
+| `0x20` | Set on 98% of chunks, meaning not known | |
+
+The keyable bit is the attribute's state, while `.ma` writes `-k` only where
+it differs from the attribute's default. `FLGS` chunks hold flags and no
+value, like `setAttr -cb on ".rx"`, plus the count when bit `0x08` is set,
+like `setAttr -s 3 ".g"`. Bit `0x08` shows up on `FLGS` and empty `CMPD`
+chunks only, in 78 files including 25 production files.
+
+### Attribute values
+
+Values are big-endian. `.mb` stores lengths in centimetres and angles in
+radians whatever the scene's `currentUnit`, and `.ma` writes them in the
+scene's units, as measured with a scene in metres and degrees. `xform`
+matrices hold radians in both formats.
+
+| Tag | Value |
+|---|---|
+| `DBLE` | Doubles, also booleans, integers, enums and times |
+| `DBL2`, `DBL3`, `FLT2`, `FLT3` | Doubles or 32-bit floats, as many as the `.ma` statement lists |
+| `STR ` | NUL-terminated text |
+| `STR#` | u32 count, then NUL-terminated strings |
+| `I32#`, `DBL#` | int32 or double values with no count, the chunk size gives it |
+| `PNT#` | 4 doubles per point, no count |
+| `MATR` | 16 doubles, or 328 bytes for an `xform` matrix |
+
+`DBLE` stores a time as int64 ticks, 141120000 per second. Read as a double,
+a positive tick count is a subnormal number and a negative one is a NaN, so
+the bit pattern tells times from other values without the attribute's type.
+On 40k `DBLE` values of the probes and twins, this rule found the 129 times
+and nothing else. The keys of an `animCurveT*` curve, a `CMPD` chunk named
+`ktv`, are pairs of an int64 time and a double, and that double holds ticks
+too on an `animCurveTT`.
+
+### Transform matrices (`xform`)
+
+A 328-byte `MATR` value is an `xform` matrix, written `setAttr ".xm[0]"
+-type "matrix" "xform" ...` in `.ma`, as on the `xm` attribute of `dagPose`
+nodes. Doubles unless noted:
+
+| Offset | Field |
+|---|---|
+| 0 | Scale |
+| 24 | Rotate, in radians |
+| 48 | Rotate order as a u32, then 4 bytes not initialised by Maya |
+| 56 | Translate |
+| 80 | Shear |
+| 104 | Scale pivot, negated |
+| 128 | Scale pivot translate |
+| 152 | Rotate pivot, negated |
+| 176 | Rotate pivot translate |
+| 200 | Rotate axis, a quaternion of 4 doubles |
+| 232 | Joint orient, a quaternion |
+| 264 | Inverse scale |
+| 288 | A unit quaternion with no `.ma` counterpart |
+| 320 | 8 bytes. Bit `0x01` of byte 321 is segment scale compensate, byte 320 is 0 or 1, meaning not known |
+
+`.ma` lists the same fields in the same order, without the extra quaternion,
+with the pivots not negated, and ends with `yes` or `no` for segment scale
+compensate. All 38 values match on the 1015 `xform` matrices of the fixtures,
+probes and production twins.
+
+### Meshes
+
+A mesh shape stores its geometry in one `MESH` chunk, where `.ma` has `vt`,
+`ed`, `fc`, `n`, `uvst` and `clst` statements. In order:
+
+| Part | Layout |
+|---|---|
+| Points | u32 float count, then x, y, z 32-bit floats per vertex |
+| Edges | u32 word count, then 2 vertex indices per edge. Bit 31 of the first one is set on hard edges, whose third `.ma` value is 0 |
+| Faces | u32 word count, then a word per face edge. The low 29 bits are the edge index, bit 31 marks an edge used in reverse, written `-1 - index` in `.ma`, bit 30 ends a loop that a hole follows, bit 29 ends a face |
+| Normals | u32 float count and the floats, then if there are any, a u32 count and that many words |
+| UV sets | u32 count and a u32 of unknown meaning, then per set its name, a u32 float count and the u, v floats, a u32 count and an int32 UV index per face vertex, -1 for none |
+| Colour sets | Not decoded yet |
+
+16 bytes or more follow the colour sets, not decoded yet. Points, edges,
+faces with holes and UV sets match the `.ma` twins of the probe meshes and
+of 4 production scenes.
+
+### Added attributes (`ATTR`)
+
+An `ATTR` chunk is one `addAttr`. Unlike value chunks it has no attribute
+name and flag byte in front. It starts with a type code, 4 flag bytes, a
+u32 child count and type blocks. Compounds have a u32 count and that many
+4-byte value tags, the tag of the attribute's own type first. `aTIM` has two
+blocks, every other code one.
+
+| Type code | `addAttr` | Child count | Blocks |
+|---|---|---|---|
+| `aBOL`, `aBYT`, `aCHR`, `aSI1`, `aLI1`, `aFLT`, `aDBL`, `aAGL`, `aLNR`, `aENM` | `-at` `bool`, `byte`, `char`, `short`, `long`, `float`, `double`, `doubleAngle`, `doubleLinear`, `enum` | 1 | Zero |
+| `aTIM` | `-at time` | 2 | `aTIM`, zero |
+| `aMSG` | `-at message` | 1 | `aMSG` |
+| `aMTX`, `aFMX` | `-at matrix`, `-at fltMatrix` | 1 | `MATR` |
+| `aFL2`, `aDB2`, `aLI2`, `aSI2` | `-at float2`, `double2`, `long2`, `short2` | 2 | Count 4, then `FLT2`, `DBL2`, `LNG2`, `SRT2` |
+| `aFL3`, `aDB3`, `aLI3`, `aSI3` | `-at float3`, `double3`, `long3`, `short3` | 3 | Count 4, then `FLT3`, `DBL3`, `LNG3`, `SRT3` |
+| `aDB4` | `-at double4` | 4 | Count 1, then `DBL4` |
+| `aCPD` | `-at compound` | Number of children | Count 1, then `CMPD` |
+| `aTYP` | `-dt`. The block is the value tag, `STR `, `STR#`, `MATR`, `DBL#`, `I32#`, `PNT#`, `VEC#`, `MESH`, `NRBC`, `CMP#` or `ATAL` | 1 | The value tag |
+
+Then come `long\0short\0` and, in this order, the fields the flags announce.
+The nice name, the enum names of an `aENM` such as `world:local:far=5`, the
+parent name, a u32, the minimum and maximum, the soft minimum and maximum,
+and `DBLE` with the default value, all numbers as doubles. These numbers are
+in internal units in both formats, so `-dv 3` on a `doubleLinear` in a scene
+in metres is 3 cm. Maya drops the default of a time attribute.
+
+| Byte | Bit | Meaning |
+|---|---|---|
+| 0 | | Always 0 |
+| 1 | `0x01` | `-usedAsFilename` |
+| 1 | `0x02` | `-category` |
+| 1 | `0x20` | Storable, clear for `-s false` |
+| 2 | `0x02` | Enum names follow |
+| 2 | `0x08`, `0x10` | Soft minimum and maximum follow, set together so far |
+| 2 | `0x20` | `-hidden` |
+| 2 | `0x40` | `-keyable` |
+| 2 | `0x80` | A nice name follows |
+| 3 | `0x01` | `-multi` |
+| 3 | `0x02` | A minimum follows |
+| 3 | `0x04` | A maximum follows |
+| 3 | `0x08` | A default value follows. `.ma` writes `-dv` only when it is not 0 |
+| 3 | `0x20` | A parent name follows, `-parent` |
+| 3 | `0x40` | Always set |
+| 3 | `0x80` | `-internalSet` |
+
+The names and the `-usedAsFilename` bit match the `addAttr` statements of
+the `.ma` twins for all 7268 records of the fixtures, probes and production
+twins. The other bits were measured on 6.9k of these records. The names of
+all 7.58M records of 849 production `.mb` files decode with these rules.
 
 ### Instances
 
@@ -247,6 +391,9 @@ byte for byte; the other 5 hold `.mb` chunks partway through.
 - Text encoding: `.mb` text is UTF-8 (`STR ` values, metadata); `.ma` text
   uses the code page of its `//Codeset:` comment. The `externalContentTable`
   CRC is computed on the code page bytes in both.
+- `.mb` stores lengths in centimetres and angles in radians, `.ma` in the
+  scene's `currentUnit`, so moving a value between the formats needs the
+  scene's units.
 - `externalContentTable` lists some file dependencies, but only in about 69%
   of production `.mb` and 21% of `.ma`, and never Alembic or Arnold nodes.
 - Maya-native path attributes use forward slashes; plugin attributes store

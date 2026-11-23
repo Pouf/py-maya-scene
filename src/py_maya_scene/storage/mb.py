@@ -7,9 +7,11 @@ from typing import Callable, List, cast
 
 from ..binary import Chunk, GroupChunk, extent, read_mb, write_mb
 from ..binary.scene_chunks import (
+    AddedAttribute,
     Crea,
     ReferenceEdit,
     ReferenceEdits,
+    decode_added_attribute,
     decode_connection,
     decode_crea,
     decode_double,
@@ -202,6 +204,13 @@ class MbNode(NodeRecord):
             MbAttribute(chunk)
             for chunk in self._group.chunks[1:]
             if isinstance(chunk, Chunk) and chunk.tag in _STRING_TAGS
+        ]
+
+    def added_attributes(self) -> list[AddedAttribute]:
+        return [
+            decode_added_attribute(chunk.data)
+            for chunk in self._group.chunks[1:]
+            if isinstance(chunk, Chunk) and chunk.tag == b"ATTR"
         ]
 
 

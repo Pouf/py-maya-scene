@@ -7,7 +7,7 @@ single tokens, so the rest of a statement keeps Maya's own layout.
 from __future__ import annotations
 
 from ..ascii import Document, Token
-from ..binary.scene_chunks import ReferenceEdit, ReferenceEdits
+from ..binary.scene_chunks import AddedAttribute, ReferenceEdit, ReferenceEdits
 from ..data.node_types import DEFAULT_NODES, PARENT_TYPES, TYPE_NAMES
 from ..mel import number, quote, unquote
 from ..resolvers.file_attributes import type_chain
@@ -50,6 +50,9 @@ _LONG_FLAGS = {
     "-add": "-addObject",
     "-nt": "-nodeType",
     "-v": "-value",
+    "-ln": "-longName",
+    "-sn": "-shortName",
+    "-uaf": "-usedAsFilename",
 }
 
 
@@ -352,6 +355,22 @@ class MaNode(NodeRecord):
                 or document.contains(index, '-type "stringArray"')
             )
         ]
+
+    def added_attributes(self) -> list[AddedAttribute]:
+        found = []
+        for index in range(self._index + 1, self._end):
+            if self._document.command(index) != "addAttr":
+                continue
+            tokens = self._document.tokens(index)
+            names = []
+            for flag in ("-ln", "-sn"):
+                position = _flag_value(tokens, flag)
+                if position is not None:
+                    names.append(_read(self._document, tokens[position].text))
+            used_as_filename = any(_is_flag(t, "-uaf") for t in tokens)
+            # Maya writes both names, a script may write one for both
+            found.append(AddedAttribute(names[0], names[-1], used_as_filename))
+        return found
 
 
 class MaReference(ReferenceRecord):

@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Callable, List, NamedTuple, Union
 
-from ..binary.scene_chunks import ReferenceEdits
+from ..binary.scene_chunks import AddedAttribute, ReferenceEdits
 
 AttributeValue = Union[str, List[str], ReferenceEdits]
 
@@ -113,6 +113,10 @@ class NodeRecord(ABC):
     @abstractmethod
     def string_attributes(self) -> list[AttributeRecord]:
         """The `STR`/`STR#` attributes only, found without decoding the others."""
+
+    @abstractmethod
+    def added_attributes(self) -> list[AddedAttribute]:
+        """The attributes the file adds to the node with `addAttr`, in file order."""
 
 
 class ReferenceRecord(ABC):

@@ -21,8 +21,13 @@ def _short_names(node_type: str) -> dict[str, str]:
     return names
 
 
-def short_attribute_name(node_type: str, name: str) -> str:
+def short_attribute_name(
+    node_type: str, name: str, added: dict[str, str] | None = None
+) -> str:
     """`name` with each long name of an attribute of `node_type` made short
-    (`uvSet[0].uvSetName` > `uvst[0].uvsn`)."""
+    (`uvSet[0].uvSetName` > `uvst[0].uvsn`). `added` maps the long names of
+    the node's added attributes to their short names."""
     short_names = _short_names(node_type)
+    if added:
+        short_names = {**short_names, **added}
     return _NAME.sub(lambda match: short_names.get(match[0], match[0]), name)
