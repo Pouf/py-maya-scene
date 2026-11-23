@@ -38,7 +38,8 @@ def main(paths: list[str]) -> None:
             chain = info["inherited"] + [name]
             for parent, child in zip(chain, chain[1:]):
                 parents[child] = parent
-            for long_name, short_name, _, used_as_filename, _, _ in info["attributes"]:
+            for attribute in info["attributes"]:
+                long_name, short_name, _, used_as_filename = attribute[:4]
                 if used_as_filename:
                     file_attributes.setdefault(name, set()).add((short_name, long_name))
                 short_names.setdefault(name, set()).add((long_name, short_name))

@@ -36,6 +36,31 @@ def path_values(node):
     return values
 
 
+# Default nodes the `units` fixture edits; its other nodes are the ones it creates
+EDITED_DEFAULT_NODES = ["defaultResolution", "time1"]
+
+
+def plug_values(node):
+    """`getAttr` and the lock, keyable and channel box flags of every plug
+    with no incoming connection: Maya's own answer for each value."""
+    values = []
+    for attr in cmds.listAttr(node, multi=True) or []:
+        plug = node + "." + attr
+        try:
+            if cmds.listConnections(plug, source=True, destination=False):
+                continue
+            value = cmds.getAttr(plug)
+            flags = [
+                cmds.getAttr(plug, lock=True),
+                cmds.getAttr(plug, keyable=True),
+                cmds.getAttr(plug, channelBox=True),
+            ]
+        except (RuntimeError, ValueError, TypeError):  # no value to give
+            continue
+        values.append([attr, value, flags])
+    return values
+
+
 def dump(path):
     os.environ["PY_MAYA_SAMPLES"] = os.path.dirname(os.path.abspath(path)).replace(
         "\\", "/"
@@ -75,6 +100,10 @@ def dump(path):
         ],
         "paths": sorted(v for n in nodes for v in path_values(n)),
     }
+    if os.path.basename(path).startswith("units."):
+        defaults = set(cmds.ls(defaultNodes=True)) | set(cmds.ls(readOnly=True))
+        created = [n for n in nodes if n.split("|")[-1] not in defaults]
+        data["values"] = {n: plug_values(n) for n in created + EDITED_DEFAULT_NODES}
     # ASCII JSON in binary mode: the same bytes from Python 2.7 (Maya 2018) and 3
     with io.open(path + ".json", "wb") as f:
         f.write(json.dumps(data, indent=1, sort_keys=True).encode("ascii"))
