@@ -97,6 +97,38 @@ def encode_string_array(texts: list[str]) -> bytes:
     return _U32.pack(len(texts)) + b"".join(encode_string(t) for t in texts)
 
 
+class AddedAttribute(NamedTuple):
+    """`ATTR`: an attribute the file adds to its node with `addAttr`."""
+
+    long_name: str
+    short_name: str
+    used_as_filename: bool
+
+
+def decode_added_attribute(data: bytes) -> AddedAttribute:
+    """`ATTR`: a type code, 4 flag bytes, a u32 child count, type blocks,
+    `long\\0short\\0`, then fields the flags announce.
+
+    Compounds (`aCPD`, and numeric codes ending in 2, 3 or 4 like `aDB3`)
+    have a u32 count and that many 4-byte value tags, `aTIM` has two blocks,
+    other codes one. Bit `0x01` of flag byte 1 is `-usedAsFilename`.
+    """
+    code = data[:4]
+    if code == b"aTIM":
+        start = 20
+    elif code == b"aCPD" or code[3:] in (b"2", b"3", b"4"):
+        start = 16 + 4 * _U32.unpack_from(data, 12)[0]
+    else:
+        start = 16
+    long_end = data.index(b"\x00", start)
+    short_end = data.index(b"\x00", long_end + 1)
+    return AddedAttribute(
+        decode_text(data[start:long_end]),
+        decode_text(data[long_end + 1 : short_end]),
+        bool(data[5] & 0x01),
+    )
+
+
 def split_reference(data: bytes, with_depth: bool) -> tuple[bytes, str, bytes]:
     """Split a `FREF` (or `FRDI`, which starts with a u32 depth) payload.
 

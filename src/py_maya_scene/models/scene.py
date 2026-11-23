@@ -216,18 +216,26 @@ class Scene:
         ]
 
     def file_attributes(self, extra: ExtraAttributes | None = None) -> list[Attribute]:
-        """Stored string values of the attributes that hold file paths.
+        """Stored string values of the attributes that hold file paths, the
+        ones Maya flags as file names in its schema or with `addAttr
+        -usedAsFilename`.
 
         `extra` adds attributes per node type, as stored short names (for
         example `{"transform": ["icon_path"]}`); subtypes inherit them.
         """
         found: list[Attribute] = []
         for node in self._nodes:
+            strings = node._string_attributes()
+            if not strings:
+                continue
             names = set(file_attribute_names(node.type))
             if extra:
                 for node_type in type_chain(node.type):
                     names.update(extra.get(node_type, ()))
-            found.extend(a for a in node._string_attributes() if a.leaf_name in names)
+            for added in node._record.added_attributes():
+                if added.used_as_filename:
+                    names.add(added.short_name)
+            found.extend(a for a in strings if a.leaf_name in names)
         return found
 
     def reference_edits(self) -> list[tuple[Attribute, ReferenceEdits]]:

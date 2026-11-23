@@ -122,6 +122,30 @@ def test_deps_fixture(ext: str) -> None:
     assert gpu.attr("cacheFileName").value == "P:/cache/anim_gpu.abc"
 
 
+@pytest.mark.parametrize("ext", FORMATS)
+def test_added_attributes(ext: str) -> None:
+    scene = py_maya_scene.parse(SAMPLES / "maya2025" / f"deps.{ext}")
+    node = scene.node("addedAttrs")
+    assert node.attr("sidecarPath").value == "P:/data/sidecar.json"
+    assert node.attr("offset").name == "ofs"
+    # One added attribute per numeric compound type
+    for long_name, short_name in [
+        ("uvShift", "aduv"),
+        ("span", "adsp"),
+        ("cells", "adce"),
+        ("tile", "adti"),
+        ("voxel", "advo"),
+        ("quat", "adqu"),
+    ]:
+        assert node.attr(long_name).name == short_name
+    render_globals = scene.node("defaultRenderGlobals")
+    assert render_globals.attr("defaultSurfaceShader").value == "standardSurface1"
+    assert (
+        Dependency("P:/data/sidecar.json", "|addedAttrs", "scp", "attribute", False)
+        in scene.dependencies()
+    )
+
+
 def test_short_attribute_names() -> None:
     assert short_attribute_name("transform", "visibility") == "v"
     # `rot` is useRotate in Maya 2022 and rotateWeight in Maya 2024
@@ -366,6 +390,9 @@ LONG_FLAGS = (
     b'requires -nodeType "pgYetiMaya" "pgYetiMaya" "4.0";\r\n'
     b'createNode transform -name "ALL";\r\n'
     b'\trename -uuid "11111111-2222-3333-4444-555555555555";\r\n'
+    b'\taddAttr -cachedInternally true -usedAsFilename -shortName "sc" -longName "sidecar"'
+    b' -dataType "string";\r\n'
+    b'\tsetAttr ".sc" -type "string" "C:/a/sidecar.json";\r\n'
     b'createNode transform -name "geo" -parent "ALL";\r\n'
     b'createNode mesh -name "geoShape" -parent "geo";\r\n'
     b'createNode transform -name "other";\r\n'
@@ -389,6 +416,10 @@ def test_long_flags(tmp_path: Path) -> None:
         "time1",
     ]
     assert scene.node("ALL").uuid == "11111111-2222-3333-4444-555555555555"
+    assert scene.node("ALL").attr("sidecar").value == "C:/a/sidecar.json"
+    assert [d.path for d in scene.dependencies() if d.kind == "attribute"] == [
+        "C:/a/sidecar.json"
+    ]
     assert scene.node("time1").is_default
     assert scene.node("geoShape").paths == ["|ALL|geo|geoShape", "|other|geoShape"]
     assert scene.plugins[0].node_types == ["pgYetiMaya"]

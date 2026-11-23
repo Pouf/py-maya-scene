@@ -233,10 +233,12 @@ class Node:
         """The stored attribute named `name`, by short or long name (`ftn`,
         `fileTextureName`, `uvst[0].uvsn`, `uvSet[0].uvSetName`).
 
-        Attributes missing from Maya's schema, `addAttr` ones included, match
-        their stored name only.
+        Long names come from Maya's schema and from the node's `addAttr`
+        records. Attributes of node types the schema misses match their
+        stored name only.
         """
-        short_name = short_attribute_name(self.type, name)
+        added = {a.long_name: a.short_name for a in self._record.added_attributes()}
+        short_name = short_attribute_name(self.type, name, added)
         for attribute in self.attributes:
             if attribute.name == short_name:
                 return attribute

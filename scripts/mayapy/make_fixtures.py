@@ -81,6 +81,46 @@ set_path(
     "fileTextureName",
     "P:/" + "x" * 300 + ".tif",
 )
+# Added attributes with short names, one flagged as a file name
+added = cmds.createNode("transform", name="addedAttrs")
+cmds.addAttr(
+    added,
+    longName="sidecarPath",
+    shortName="scp",
+    dataType="string",
+    usedAsFilename=True,
+)
+set_path(added, "sidecarPath", "P:/data/sidecar.json")
+cmds.addAttr(added, longName="offset", shortName="ofs", attributeType="double3")
+for axis in "XYZ":
+    cmds.addAttr(
+        added,
+        longName="offset" + axis,
+        shortName="ofs" + axis,
+        attributeType="double",
+        parent="offset",
+    )
+cmds.setAttr(added + ".offset", 1, 2, 3)
+for long_name, short_name, attribute_type, child_type, values in [
+    ("uvShift", "aduv", "float2", "float", (0.5, 0.25)),
+    ("span", "adsp", "double2", "double", (1.5, 2.5)),
+    ("cells", "adce", "long2", "long", (4, 5)),
+    ("tile", "adti", "short2", "short", (6, -7)),
+    ("voxel", "advo", "short3", "short", (1, 2, 3)),
+    ("quat", "adqu", "double4", "double", (0, 0, 0.5, 1)),
+]:
+    cmds.addAttr(
+        added, longName=long_name, shortName=short_name, attributeType=attribute_type
+    )
+    for axis in "XYZW"[: len(values)]:
+        cmds.addAttr(
+            added,
+            longName=long_name + axis,
+            shortName=short_name + axis,
+            attributeType=child_type,
+            parent=long_name,
+        )
+    cmds.setAttr(added + "." + long_name, *values)
 cmds.file("$PY_MAYA_SAMPLES/ref_child.mb", reference=True, namespace="child")
 set_path(cmds.createNode("audio", name="myAudio"), "filename", "P:/sound/dialog.wav")
 for plugin, node_type, attr, value in [

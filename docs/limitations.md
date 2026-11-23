@@ -19,8 +19,9 @@ written back unchanged, but `Attribute.value` does not decode them.
 
 - Paths are reported as stored: unresolved, with environment variables kept.
 - File attributes come from Maya's own schema (attributes flagged as file
-  names), plus Yeti and Golaem ones. Other plugin attributes holding paths
-  need `extra` (see `Scene.dependencies`).
+  names) and from the attributes a file adds with `addAttr -usedAsFilename`,
+  plus Yeti and Golaem ones. Other plugin attributes holding paths need
+  `extra` (see `Scene.dependencies`).
 - For reference edits, the edited node's type is not stored in the file, so
   attributes are matched by name only.
 
