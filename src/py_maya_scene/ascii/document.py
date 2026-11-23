@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import sys
 from array import array
+from collections import OrderedDict
 from typing import Iterator, NamedTuple
 
 # Possessive quantifiers (Python 3.11+) never backtrack; the patterns need no
@@ -31,8 +32,10 @@ _STATEMENT = re.compile(
     rf'(?:\s|//[^\n]*\n)*{_P}([A-Za-z]\w*{_P})[^";]*{_P}(?:{_STRING}[^";]*{_P})*{_P};',
     re.S,
 )
-_TOKEN = re.compile(rf'{_STRING}|[^\s;"]+', re.S)
+# Comment lines are skipped, the first statement carries the header comments
+_TOKEN = re.compile(rf'{_STRING}|//[^\n]*|[^\s;"]+', re.S)
 _CODESET = re.compile(r"//Codeset: (\S+)")
+_TOKENS_CACHED = 4096
 
 
 class Token(NamedTuple):
@@ -84,6 +87,15 @@ class Document:
         ):
             raise ValueError(f"unexpected text after the last statement: {tail[:60]!r}")
         self._edited: dict[int, str] = {}
+        # Tokens of the statements read last, since plugs read a statement's
+        # name, flags and values separately
+        self._tokens_cache: OrderedDict[int, list[Token]] = OrderedDict()
+        # Statements added after a parsed one, numbered after the parsed ones
+        self._parsed = len(self._ends)
+        self._inserted: dict[int, list[int]] = {}
+        self._anchors: dict[int, int] = {}
+        self.newline = "\r\n" if "\r\n" in self.text[:4096] else "\n"
+        """Line end the file uses, for statements added to it."""
 
     def __len__(self) -> int:
         return len(self._ends)
@@ -114,8 +126,22 @@ class Document:
         such a run is one token, spanning all its parts, whose text is the
         joined literal.
         """
+        cached = self._tokens_cache.get(index)
+        if cached is not None:
+            self._tokens_cache.move_to_end(index)
+            return cached
+        tokens = self._tokenize(index)
+        self._tokens_cache[index] = tokens
+        if len(self._tokens_cache) > _TOKENS_CACHED:
+            self._tokens_cache.popitem(last=False)
+        return tokens
+
+    def _tokenize(self, index: int) -> list[Token]:
         text = self.statement(index)
-        found = [(m.group(), m.start(), m.end()) for m in _TOKEN.finditer(text)]
+        found = []
+        for match in _TOKEN.finditer(text):
+            if not match.group().startswith("//"):
+                found.append((match.group(), match.start(), match.end()))
 
         def is_string(position: int) -> bool:
             return position < len(found) and found[position][0].startswith('"')
@@ -157,6 +183,28 @@ class Document:
             token = tokens[position]
             text = text[: token.start] + replacements[position] + text[token.end :]
         self._edited[index] = text
+        self._tokens_cache.pop(index, None)
+
+    def insert_after(self, index: int, text: str) -> int:
+        """Add the statement `text`, with the whitespace before it, right after
+        statement `index`, and return the new statement's index. Indices of
+        other statements do not change."""
+        match = _STATEMENT.fullmatch(text)
+        if match is None:
+            raise ValueError(f"not one statement: {text!r}")
+        command = match.group(1)
+        if command not in self._command_names:
+            self._command_names.append(command)
+        added = len(self._ends)
+        self._ends.append(-1)  # in no slice of the parsed text
+        self._commands.append(self._command_names.index(command))
+        self._edited[added] = text
+        anchor = self._anchors.get(index, index)
+        followers = self._inserted.setdefault(anchor, [])
+        position = followers.index(index) + 1 if index in followers else len(followers)
+        followers.insert(position, added)
+        self._anchors[added] = anchor
+        return added
 
     def decode(self, raw: str) -> str:
         """A string value as read from the document, in the file's code page."""
@@ -169,9 +217,12 @@ class Document:
     def _pieces(self) -> Iterator[str]:
         # Unedited runs of statements as single slices
         start = 0
-        for index in sorted(self._edited):
+        edited = {i for i in self._edited if i < self._parsed}
+        for index in sorted(edited | set(self._inserted)):
             yield self.text[start : self._ends[index - 1] if index else 0]
-            yield self._edited[index]
+            yield self.statement(index)
+            for added in self._inserted.get(index, []):
+                yield self._edited[added]
             start = self._ends[index]
         yield self.text[start:]
 

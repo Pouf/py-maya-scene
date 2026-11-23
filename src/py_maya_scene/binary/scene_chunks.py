@@ -9,12 +9,23 @@ byte sequence survives a decode/encode cycle. Layouts are documented in
 from __future__ import annotations
 
 import struct
-from typing import Callable, Iterator, List, NamedTuple, Tuple
+from typing import Callable, Iterator, List, NamedTuple, Sequence, Tuple, Union
 
 UUID_SIZE = 16
 _U32 = struct.Struct(">I")
 _DOUBLE = struct.Struct(">d")
+_U64 = struct.Struct(">Q")
+_I64 = struct.Struct(">q")
 _UUID_WORDS = struct.Struct("<4I")
+# An xform matrix holds scale, rotate, rotate order and 4 unknown bytes,
+# translate, shear, negated scale pivot, scale pivot translate, negated rotate
+# pivot, rotate pivot translate, rotate axis and joint orient quaternions,
+# inverse scale, a quaternion with no `.ma` counterpart, then 8 bytes whose
+# second byte holds segment scale compensate in bit 0
+_XFORM = struct.Struct(">3d3dI4x3d3d3d3d3d3d4d4d3d4dBB6x")
+XFORM_SIZE = _XFORM.size
+# A u32 count comes before the value
+SIZE_FLAG = 0x08
 
 
 def decode_text(raw: bytes) -> str:
@@ -71,6 +82,152 @@ def decode_double(value: bytes) -> float:
     if len(value) != 8:
         raise ValueError(f"not a single double: {value!r}")
     return float(_DOUBLE.unpack(value)[0])
+
+
+# Tags of number values > struct code of one number
+NUMBER_CODES = {
+    b"DBLE": "d",
+    b"CMPD": "d",
+    b"DBL2": "d",
+    b"DBL3": "d",
+    b"DBL4": "d",
+    b"FLT2": "f",
+    b"FLT3": "f",
+    b"LNG2": "i",
+    b"LNG3": "i",
+    b"SRT2": "h",
+    b"SRT3": "h",
+}
+
+
+def is_ticks(bits: int) -> bool:
+    """Whether 8 bytes that read as a double hold int64 ticks. A positive
+    tick count reads as a subnormal double and a negative one as a NaN."""
+    return (bits >> 52 == 0 and bits != 0) or bits >> 52 == 0xFFF
+
+
+def decode_numbers(
+    tag: bytes, flags: int, value: bytes, kinds: Sequence[str | None]
+) -> tuple[list[float], list[str | None]] | None:
+    """The numbers of a number value and the kind of each, None for other tags.
+
+    `kinds` gives the kind of each number of an element, in turn. Times are
+    int64 ticks, and a number of unknown kind whose bits read as ticks is a
+    time.
+    """
+    code = NUMBER_CODES.get(tag)
+    if code is None:
+        return None
+    start = 4 if flags & SIZE_FLAG else 0
+    width = struct.calcsize(code)
+    numbers: list[float] = []
+    found: list[str | None] = []
+    for position in range((len(value) - start) // width):
+        at = start + position * width
+        kind = kinds[position % len(kinds)] if kinds else None
+        if code == "d":
+            (bits,) = _U64.unpack_from(value, at)
+            if kind == "time" or (kind is None and is_ticks(bits)):
+                numbers.append(float(_I64.unpack_from(value, at)[0]))
+                found.append("time")
+                continue
+        numbers.append(float(struct.unpack_from(">" + code, value, at)[0]))
+        found.append(kind)
+    return numbers, found
+
+
+def number_offset(tag: bytes, flags: int, position: int) -> int:
+    """Byte offset of number `position` in a number value."""
+    start = 4 if flags & SIZE_FLAG else 0
+    return start + position * struct.calcsize(NUMBER_CODES[tag])
+
+
+def encode_number(tag: bytes, kind: str | None, number: float) -> bytes:
+    """One number of a number value, a time as int64 ticks."""
+    code = NUMBER_CODES[tag]
+    if code == "d" and kind == "time":
+        return _I64.pack(round(number))
+    if code in ("i", "h"):
+        return struct.pack(">" + code, round(number))
+    return struct.pack(">" + code, number)
+
+
+def float32(number: float) -> float:
+    """`number` rounded to the nearest 32-bit float."""
+    return float(struct.unpack(">f", struct.pack(">f", number))[0])
+
+
+class Xform(NamedTuple):
+    """An `xform` matrix, as on `dagPose.xm`. The parts of a transform, in
+    centimetres and radians, quaternions as x y z w."""
+
+    scale: tuple[float, ...]
+    rotate: tuple[float, ...]
+    rotate_order: int
+    translate: tuple[float, ...]
+    shear: tuple[float, ...]
+    scale_pivot: tuple[float, ...]
+    scale_pivot_translate: tuple[float, ...]
+    rotate_pivot: tuple[float, ...]
+    rotate_pivot_translate: tuple[float, ...]
+    rotate_axis: tuple[float, ...]
+    joint_orient: tuple[float, ...]
+    inverse_scale: tuple[float, ...]
+    segment_scale_compensate: bool
+
+
+def xform_from_numbers(numbers: Sequence[float]) -> Xform:
+    """An `xform` from the 37 numbers `.ma` writes after `"xform"`."""
+    n = [float(v) for v in numbers]
+    return Xform(
+        tuple(n[0:3]),
+        tuple(n[3:6]),
+        int(n[6]),
+        tuple(n[7:10]),
+        tuple(n[10:13]),
+        tuple(n[13:16]),
+        tuple(n[16:19]),
+        tuple(n[19:22]),
+        tuple(n[22:25]),
+        tuple(n[25:29]),
+        tuple(n[29:33]),
+        tuple(n[33:36]),
+        bool(n[36]),
+    )
+
+
+DataValue = Union[List[float], List[Tuple[float, ...]], Xform]
+
+
+def group_numbers(numbers: Sequence[float], size: int) -> list[tuple[float, ...]]:
+    """`numbers` cut into tuples of `size`."""
+    groups = []
+    for start in range(0, len(numbers) - size + 1, size):
+        groups.append(tuple(numbers[start : start + size]))
+    return groups
+
+
+def decode_data(tag: bytes, value: bytes) -> DataValue | None:
+    """Array and matrix values of `I32#`, `DBL#`, `PNT#` with 4 doubles per
+    point, `VEC#` with 3 per vector and `MATR` with 16 doubles or an `xform`.
+    None for other tags. Arrays have no count, the value size gives it."""
+    if tag == b"I32#":
+        return [float(v) for v in struct.unpack(f">{len(value) // 4}i", value)]
+    if tag not in (b"DBL#", b"PNT#", b"VEC#", b"MATR"):
+        return None
+    if tag == b"MATR" and len(value) == XFORM_SIZE:
+        fields = _XFORM.unpack(value)
+        xform = xform_from_numbers(list(fields[:36]) + [fields[-1] & 1])
+        return xform._replace(
+            scale_pivot=tuple(-v for v in xform.scale_pivot),
+            rotate_pivot=tuple(-v for v in xform.rotate_pivot),
+        )
+    doubles = [float(v) for v in struct.unpack(f">{len(value) // 8}d", value)]
+    if tag == b"PNT#":
+        return group_numbers(doubles, 4)
+    if tag == b"VEC#":
+        return group_numbers(doubles, 3)
+    return doubles
 
 
 def decode_string(value: bytes) -> str:

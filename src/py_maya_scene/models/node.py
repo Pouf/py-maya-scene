@@ -7,11 +7,13 @@ from typing import TYPE_CHECKING
 
 from ..resolvers.attribute_names import short_attribute_name
 from ..resolvers.attribute_specs import added_attribute_specs, attribute_specs
+from .plug import Plug, full_path, parse_path
 from .rename import rename_node
 
 if TYPE_CHECKING:
     from ..resolvers.attribute_specs import AttributeSpec
     from ..storage.base import AttributeRecord, AttributeValue, NodeRecord
+    from .plug import Component
     from .scene import Scene
 
 _INDEX = re.compile(r"\[[^\]]*\]")
@@ -70,6 +72,10 @@ class Node:
         self._record = _record
         self.scene = scene
         self._spec_cache: dict[str, AttributeSpec] | None = None
+        self._added_names: dict[str, str] = {}
+        self._paths_cache: dict[str, list[tuple[AttributeRecord, list[Component]]]]
+        self._paths_cache = {}
+        self._paths_read = False
 
     @property
     def is_default(self) -> bool:
@@ -232,12 +238,35 @@ class Node:
     def _string_attributes(self) -> list[Attribute]:
         return [Attribute(r, self) for r in self._record.string_attributes()]
 
+    def _record_paths(
+        self, attribute: str
+    ) -> list[tuple[AttributeRecord, list[Component]]]:
+        """The records whose full path starts with `attribute`, with that path,
+        in file order. Parsed once, since plugs read them for every value."""
+        if not self._paths_read:
+            specs = self._specs()
+            for record in self._record.attributes():
+                try:
+                    path = full_path(parse_path(record.name), specs)
+                except ValueError:  # a name no plug can have
+                    continue
+                self._paths_cache.setdefault(path[0][0], []).append((record, path))
+            self._paths_read = True
+        return self._paths_cache.get(attribute, [])
+
+    def _forget_records(self) -> None:
+        """Read the records again after one was added."""
+        self._paths_cache = {}
+        self._paths_read = False
+
     def _specs(self) -> dict[str, AttributeSpec]:
         """Specs of the node's attributes by short name, added ones included."""
         if self._spec_cache is None:
-            specs = dict(attribute_specs(self.type))
-            specs.update(added_attribute_specs(self._record.added_attributes()))
+            added = self._record.added_attributes()
+            specs = dict(attribute_specs(self.type, self.scene.version))
+            specs.update(added_attribute_specs(added))
             self._spec_cache = specs
+            self._added_names = {a.long_name: a.short_name for a in added}
         return self._spec_cache
 
     def attr(self, name: str) -> Attribute:
@@ -248,12 +277,21 @@ class Node:
         records. Attributes of node types the schema misses match their
         stored name only.
         """
-        added = {a.long_name: a.short_name for a in self._record.added_attributes()}
-        short_name = short_attribute_name(self.type, name, added)
+        short_name = self._short_name(name)
         for attribute in self.attributes:
             if attribute.name == short_name:
                 return attribute
         raise KeyError(f"{self.name} stores no value for {name!r}")
+
+    def _short_name(self, name: str) -> str:
+        self._specs()  # reads the added attribute names once
+        return short_attribute_name(self.type, name, self._added_names)
+
+    def plug(self, name: str) -> Plug:
+        """The plug named `name`, by short or long attribute names with indices
+        (`tx`, `translate`, `pnts[3]`), with the value and flags the file gives
+        it. Unlike `attr`, it reads across every record that sets the plug."""
+        return Plug(self, self._short_name(name))
 
     def __repr__(self) -> str:
         return f"Node({self.path!r}, {self.type!r})"

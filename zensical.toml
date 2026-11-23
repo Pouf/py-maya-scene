@@ -19,6 +19,7 @@ nav = [
         { "Scene" = "api/scene.md" },
         { "Node" = "api/node.md" },
         { "Attribute" = "api/attribute.md" },
+        { "Plug" = "api/plug.md" },
         { "Reference" = "api/reference.md" },
         { "Other" = [
             { "Reference Edits" = "api/other/reference_edits.md" },

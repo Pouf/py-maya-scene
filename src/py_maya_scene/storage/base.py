@@ -9,12 +9,22 @@ Setters write through to the storage; untouched records are never re-encoded.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, List, NamedTuple, Union
+from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple, Union
 
-from ..binary.scene_chunks import AddedAttribute, ReferenceEdits
+from ..binary.scene_chunks import AddedAttribute, DataValue, ReferenceEdits
 from ..units import Units
 
 AttributeValue = Union[str, List[str], ReferenceEdits]
+Numbers = Optional[Tuple[List[float], List[Optional[str]]]]
+
+
+class RecordFlags(NamedTuple):
+    """Flags a record states for its plug, None for those it leaves unsaid."""
+
+    locked: bool | None
+    keyable: bool | None
+    channel_box: bool | None
+
 
 _MAYA_FILE_TYPES = {".ma": "mayaAscii", ".mb": "mayaBinary"}
 
@@ -61,6 +71,28 @@ class AttributeRecord(ABC):
         """The value of an attribute the caller knows holds one double,
         boolean, integer or enum (`.mb` stores times as integer ticks under
         the same tag); `NotImplementedError` for any other storage."""
+
+    @property
+    @abstractmethod
+    def flags(self) -> RecordFlags: ...
+
+    @abstractmethod
+    def set_flags(self, flags: RecordFlags) -> None:
+        """State the flags of `flags` that are not None, keep the others."""
+
+    @abstractmethod
+    def numbers(self, kinds: Sequence[str | None]) -> Numbers:
+        """The numbers the record holds in the file's units and the kind of
+        each, or None when it holds no numbers. `kinds` gives the kind of each
+        number of an element, in turn."""
+
+    @abstractmethod
+    def set_number(self, position: int, kind: str | None, value: float) -> None:
+        """Store number `position` of `numbers()`, in the file's units."""
+
+    @abstractmethod
+    def data(self) -> DataValue | None:
+        """A matrix or array value (`xform` matrices as `Xform`), else None."""
 
     @abstractmethod
     def mentions(self, text: str) -> bool:
@@ -118,6 +150,24 @@ class NodeRecord(ABC):
     @abstractmethod
     def added_attributes(self) -> list[AddedAttribute]:
         """The attributes the file adds to the node with `addAttr`, in file order."""
+
+    @abstractmethod
+    def add_record(
+        self,
+        name: str,
+        kind: str,
+        kinds: Sequence[str | None],
+        value: Sequence[float] | str | None,
+        flags: RecordFlags,
+        defaults: RecordFlags,
+    ) -> AttributeRecord:
+        """Add a record for attribute `name` after the node's others.
+
+        `value` is numbers in the file's units (`kinds` gives the kind of each
+        number of an element), a string, or None for flags alone. `kind` is
+        the attribute's kind of value. `flags` is the plug's whole flag state,
+        `defaults` the attribute's.
+        """
 
 
 class ReferenceRecord(ABC):
@@ -224,6 +274,10 @@ class SceneStorage(ABC):
 
     codepage: str
     """Python encoding of the system code page the file was saved under."""
+
+    internal_units: bool
+    """True when values are stored in centimetres, radians and ticks (`.mb`),
+    False when in the scene's units (`.ma`)."""
 
     @property
     @abstractmethod

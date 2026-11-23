@@ -47,3 +47,14 @@ _BOOLEANS = {"yes": 1.0, "on": 1.0, "true": 1.0, "no": 0.0, "off": 0.0, "false":
 def number(text: str) -> float:
     """A MEL number or boolean literal (`1`, `0.5`, `yes`, `off`); `ValueError` otherwise."""
     return _BOOLEANS[text] if text in _BOOLEANS else float(text)
+
+
+def number_literal(value: float, boolean: bool = False) -> str:
+    """`value` as a MEL literal, `yes` or `no` for a boolean, else the
+    shortest text that reads back exactly, without a trailing `.0`."""
+    if boolean:
+        return "yes" if value else "no"
+    text = repr(float(value))
+    if text.endswith(".0"):
+        text = text[:-2]
+    return "0" if text == "-0" else text

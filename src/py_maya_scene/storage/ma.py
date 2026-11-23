@@ -6,10 +6,19 @@ single tokens, so the rest of a statement keeps Maya's own layout.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from ..ascii import Document, Token
-from ..binary.scene_chunks import AddedAttribute, ReferenceEdit, ReferenceEdits
+from ..binary.scene_chunks import (
+    AddedAttribute,
+    DataValue,
+    ReferenceEdit,
+    ReferenceEdits,
+    group_numbers,
+    xform_from_numbers,
+)
 from ..data.node_types import DEFAULT_NODES, PARENT_TYPES, TYPE_NAMES
-from ..mel import number, quote, unquote
+from ..mel import number, number_literal, quote, unquote
 from ..resolvers.file_attributes import type_chain
 from ..units import Units, short_unit_name
 from .base import (
@@ -18,7 +27,9 @@ from .base import (
     ConnectionRecord,
     InstanceRecord,
     NodeRecord,
+    Numbers,
     Plugin,
+    RecordFlags,
     ReferenceRecord,
     RelationshipRecord,
     SceneStorage,
@@ -29,6 +40,21 @@ from .base import (
 _NODE_STATEMENTS = ("setAttr", "addAttr", "rename", "lockNode")
 _TYPE_IDS = {name: type_id for type_id, name in TYPE_NAMES.items()}
 _VALUE_TYPES = {"string": "STR", "stringArray": "STR#", "dataReferenceEdits": "REFE"}
+# `setAttr -type` of values made of numbers alone, None for no type
+_NUMBER_TYPES = (
+    None,
+    "double2",
+    "double3",
+    "double4",
+    "float2",
+    "float3",
+    "long2",
+    "long3",
+    "short2",
+    "short3",
+)
+# Numbers per element of the array types
+_ARRAY_SIZES = {"doubleArray": 1, "Int32Array": 1, "pointArray": 4, "vectorArray": 3}
 # Reference edit kind > number of strings (kind 5: by its side), as in `.mb`
 _EDIT_STRINGS = {0: 3, 1: 4, 2: 3, 3: 3, 4: 3, 8: 2, 9: 2}
 
@@ -64,6 +90,7 @@ _LONG_FLAGS = {
     "-k": ("-keyable",),
     "-m": ("-multi",),
     "-s": ("-storable", "-size"),
+    "-cb": ("-channelBox",),
 }
 # Value kind of `addAttr -at` and `-dt` types, named as in attribute specs
 _ADDED_KINDS = {
@@ -218,6 +245,92 @@ class MaAttribute(AttributeRecord):
             raise NotImplementedError("only single values are decoded")
         return number(values[0].text)
 
+    @property
+    def flags(self) -> RecordFlags:
+        tokens = self._tokens()
+        before_name = tokens[: self._name_position(tokens)]
+        stated: list[bool | None] = []
+        for flag in ("-l", "-k", "-cb"):
+            position = _flag_value(before_name, flag)
+            if position is None:
+                stated.append(None)
+            else:
+                stated.append(bool(number(before_name[position].text)))
+        return RecordFlags(*stated)
+
+    def set_flags(self, flags: RecordFlags) -> None:
+        tokens = self._tokens()
+        before_name = tokens[: self._name_position(tokens)]
+        replacements = {}
+        command = tokens[0].text
+        for flag, state in (
+            ("-l", flags.locked),
+            ("-k", flags.keyable),
+            ("-cb", flags.channel_box),
+        ):
+            if state is None:
+                continue
+            text = "on" if state else "off"
+            position = _flag_value(before_name, flag)
+            if position is None:
+                command += f" {flag} {text}"
+            else:
+                replacements[position] = text
+        if command != tokens[0].text:
+            replacements[0] = command
+        if replacements:
+            self._document.replace_tokens(self._index, replacements)
+
+    def _value_tokens(self) -> tuple[str | None, list[int]]:
+        """The `-type` of the value and the positions of its tokens."""
+        tokens = self._tokens()
+        value_type = None
+        positions = []
+        position = self._name_position(tokens) + 1
+        while position < len(tokens):
+            if _is_flag(tokens[position], "-typ") and position + 1 < len(tokens):
+                value_type = _read(self._document, tokens[position + 1].text)
+                position += 2
+                continue
+            positions.append(position)
+            position += 1
+        return value_type, positions
+
+    def numbers(self, kinds: Sequence[str | None]) -> Numbers:
+        value_type, positions = self._value_tokens()
+        if not positions or value_type not in _NUMBER_TYPES:
+            return None
+        tokens = self._tokens()
+        values = []
+        found = []
+        for i, position in enumerate(positions):
+            try:
+                values.append(number(tokens[position].text))
+            except ValueError:
+                return None
+            found.append(kinds[i % len(kinds)] if kinds else None)
+        return values, found
+
+    def set_number(self, position: int, kind: str | None, value: float) -> None:
+        _, positions = self._value_tokens()
+        text = number_literal(value, boolean=kind == "bool")
+        self._document.replace_tokens(self._index, {positions[position]: text})
+
+    def data(self) -> DataValue | None:
+        value_type, positions = self._value_tokens()
+        tokens = self._tokens()
+        texts = [tokens[p].text for p in positions]
+        if value_type == "matrix":
+            if texts and texts[0] == '"xform"':
+                return xform_from_numbers([number(t) for t in texts[1:]])
+            return [number(t) for t in texts]
+        if value_type not in _ARRAY_SIZES:
+            return None
+        # A count, then the values
+        values = [number(t) for t in texts[1:]]
+        size = _ARRAY_SIZES[value_type]
+        return values if size == 1 else group_numbers(values, size)
+
     def mentions(self, text: str) -> bool:
         return self._document.contains(self._index, self._document.encode(text))
 
@@ -292,11 +405,17 @@ class MaNode(NodeRecord):
         self._end = end
         self._storage = storage
         self._tokens_cache: list[Token] | None = None
+        # setAttr statements added to the node, after its last one
+        self._added: list[int] = []
 
     def _tokens(self) -> list[Token]:
         if self._tokens_cache is None:
             self._tokens_cache = self._document.tokens(self._index)
         return self._tokens_cache
+
+    def _statements(self) -> list[int]:
+        """Indices of the node's own statements, added ones included."""
+        return list(range(self._index + 1, self._end)) + self._added
 
     def _flag(self, flag: str) -> str | None:
         tokens = self._tokens()
@@ -379,7 +498,7 @@ class MaNode(NodeRecord):
     def attributes(self) -> list[AttributeRecord]:
         return [
             MaAttribute(self._document, index)
-            for index in range(self._index + 1, self._end)
+            for index in self._statements()
             if self._document.command(index) == "setAttr"
         ]
 
@@ -387,13 +506,45 @@ class MaNode(NodeRecord):
         document = self._document
         return [
             MaAttribute(document, index)
-            for index in range(self._index + 1, self._end)
+            for index in self._statements()
             if document.command(index) == "setAttr"
             and (
                 document.contains(index, '-type "string"')
                 or document.contains(index, '-type "stringArray"')
             )
         ]
+
+    def add_record(
+        self,
+        name: str,
+        kind: str,
+        kinds: Sequence[str | None],
+        value: Sequence[float] | str | None,
+        flags: RecordFlags,
+        defaults: RecordFlags,
+    ) -> AttributeRecord:
+        document = self._document
+        words = ["setAttr"]
+        if flags.locked:
+            words.append("-l on")
+        if flags.keyable != defaults.keyable:
+            words.append("-k on" if flags.keyable else "-k off")
+        if flags.channel_box != defaults.channel_box:
+            words.append("-cb on" if flags.channel_box else "-cb off")
+        words.append(_literal(document, "." + name))
+        if isinstance(value, str):
+            words += ['-type "string"', _literal(document, value)]
+        elif value is not None:
+            if kind in _NUMBER_TYPES:
+                words.append(f'-type "{kind}"')
+            for position, number in enumerate(value):
+                number_kind = kinds[position % len(kinds)] if kinds else None
+                words.append(number_literal(number, boolean=number_kind == "bool"))
+        text = document.newline + "\t" + " ".join(words) + ";"
+        after = self._added[-1] if self._added else self._end - 1
+        index = document.insert_after(after, text)
+        self._added.append(index)
+        return MaAttribute(document, index)
 
     def added_attributes(self) -> list[AddedAttribute]:
         document = self._document
@@ -611,6 +762,8 @@ class MaRelationship(RelationshipRecord):
 
 class MaScene(SceneStorage):
     """A `.ma` file."""
+
+    internal_units = False
 
     def __init__(self, data: bytes) -> None:
         document = self._document = Document(data)

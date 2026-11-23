@@ -9,11 +9,35 @@ py_maya_scene sees what the file stores. Referenced files are not loaded, so
 the nodes they hold are not in `Scene.nodes`; only the reference itself and
 the edits the file makes to referenced nodes are.
 
-## Values other than strings
+## Plug values
 
-Strings (`STR`), string arrays (`STR#`) and reference edits (`REFE`) are
-decoded. Numbers, matrices, meshes and other values are kept as stored and
-written back unchanged, but `Attribute.value` does not decode them.
+`Node.plug()` gives the value and flags the file gives a plug, which is what
+`getAttr` gives for most plugs. Not always:
+
+- A plug driven by a connection or an animation curve gives its stored
+  static value, not the evaluated one.
+- These raise `NotImplementedError`:
+  - outputs Maya computes and never stores (`worldMatrix`);
+  - elements of the multis a node keeps itself, which the file leaves out
+    unless it sets them (mesh vertices, animation key tangents);
+  - mesh geometry (`vt`, `ed`, `fc`, `n`);
+  - NURBS curves and surfaces, component lists, character mappings and
+    generic compounds.
+- An `xform` matrix reads as its parts (`Xform`), where `getAttr` gives the
+  composed 16-value matrix.
+- What py_maya_scene knows of an attribute (kind of value, unit, default,
+  keyable state) comes from the schemas of Maya 2022 and 2025. A file of
+  Maya 2024 or older reads with Maya 2022's, which covers 2018 and 2019 files
+  only as far as their attributes did not change since. Plugin attributes the
+  schemas do not know read as stored, with no unit conversion, and their
+  keyable state comes from `.mb` records only.
+- A multi lists the elements the file stores. Elements at their default can
+  be left out, even when Maya counts them.
+
+Setting a plug writes into the records that hold it, or adds a record of its
+own. Maya would sometimes write a parent attribute instead (`.t` for `tx`),
+which reads the same. Numbers are written in their shortest exact form, not
+always with Maya's digits. A locked or connected plug is refused, as in Maya.
 
 ## Dependencies
 
@@ -50,4 +74,5 @@ Maya 2018 to 2025 (`FOR8` files).
 ## Not available yet
 
 - Converting between `.ma` and `.mb`
-- A `maya.cmds`-like API on a scene file
+- A `maya.cmds`-like API on a scene file, beyond plug values and flags
+- Adding or removing attributes and connections

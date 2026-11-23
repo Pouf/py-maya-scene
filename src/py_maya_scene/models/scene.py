@@ -67,6 +67,7 @@ class Scene:
         self._path_cache: dict[int, str] = {}
         self._paths_cache: dict[int, list[str]] = {}
         self._extra_parents: dict[int, list[str]] | None = None
+        self._units: Units | None = None
         # externalContentTable rows bound to what they describe, at the first edit
         self._content: tuple[ContentTable, list[_ContentBinding]] | None = None
 
@@ -157,7 +158,9 @@ class Scene:
     @property
     def units(self) -> Units:
         """Linear, angle and time units (`currentUnit`), by short name."""
-        return self._storage.units
+        if self._units is None:
+            self._units = self._storage.units
+        return self._units
 
     @property
     def file_info(self) -> dict[str, str]:
