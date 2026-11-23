@@ -27,8 +27,28 @@ for attribute in node.attributes:
 print(node.attr("fileTextureName").value)  # a short or long name
 ```
 
-Strings (`STR`), string arrays (`STR#`) and reference edits (`REFE`) are
-decoded; other values are kept as stored.
+An `Attribute` is one record of the file. Strings (`STR`), string arrays
+(`STR#`) and reference edits (`REFE`) are decoded there.
+
+## Read and set values
+
+A plug reads every record that sets an attribute, like `getAttr`, in the
+scene's units:
+
+```python
+print(scene.units)  # Units(linear='cm', angle='deg', time='film')
+transform = scene.node("box")
+print(transform.plug("translate").value)  # (0.0, 2.5, 0.0)
+print(transform.plug("tx").locked, transform.plug("tx").keyable)
+
+transform.plug("rotateY").value = 45  # degrees, if the scene is in degrees
+transform.plug("translate").locked = True
+scene.save("box_edited.mb")
+```
+
+Values the file does not store read as the attribute's default. A plug
+driven by a connection or an animation curve gives its stored static value,
+and setting a locked or connected plug raises `ValueError`, as in Maya.
 
 ## Inspect references
 

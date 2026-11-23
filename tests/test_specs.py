@@ -46,7 +46,7 @@ def test_added_specs_agree_across_formats(version: str, scene: str, node: str) -
 def test_added_specs() -> None:
     scene = py_maya_scene.parse(SAMPLES / "maya2025" / "units.mb")
     specs = scene.node("added")._specs()
-    # Defaults are in internal units: 3 cm in a scene in metres
+    # Defaults are in internal units, 3 cm in a scene in metres
     assert (specs["dst"].kind, specs["dst"].default) == ("linear", 3.0)
     assert specs["pos"].children == ("posX", "posY", "posZ")
     assert (specs["posX"].kind, specs["posX"].parent) == ("linear", "pos")

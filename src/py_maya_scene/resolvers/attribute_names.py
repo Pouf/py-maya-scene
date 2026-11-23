@@ -28,6 +28,10 @@ def short_attribute_name(
     (`uvSet[0].uvSetName` > `uvst[0].uvsn`). `added` maps the long names of
     the node's added attributes to their short names."""
     short_names = _short_names(node_type)
-    if added:
-        short_names = {**short_names, **added}
-    return _NAME.sub(lambda match: short_names.get(match[0], match[0]), name)
+    added = added or {}
+
+    def short(match: re.Match[str]) -> str:
+        word = match[0]
+        return added[word] if word in added else short_names.get(word, word)
+
+    return _NAME.sub(short, name)

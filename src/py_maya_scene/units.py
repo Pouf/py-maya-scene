@@ -1,4 +1,4 @@
-"""Scene units: their names in each format and their size in Maya's internal
+"""Scene units, their names in each format and their size in Maya's internal
 units, centimetres, radians and ticks."""
 
 from __future__ import annotations

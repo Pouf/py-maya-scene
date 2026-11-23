@@ -14,6 +14,9 @@ SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "models"
 @pytest.mark.parametrize("ext", ["mb", "ma"])
 def test_scene_units(version: str, ext: str) -> None:
     scene = py_maya_scene.parse(SAMPLES / version / f"units.{ext}")
+    # `requires maya` is the first statement, after the header comments.
+    # Maya 2025 writes `2025ff03`
+    assert scene.version[:4] == version[-4:]
     assert scene.units == Units("m", "deg", "ntsc")
     assert scene.units.centimetres == 100.0
 

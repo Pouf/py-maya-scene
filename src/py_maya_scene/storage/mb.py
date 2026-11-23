@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 import io
-from typing import Callable, List, cast
+from typing import Callable, List, Sequence, cast
 
 from ..binary import Chunk, GroupChunk, extent, read_mb, write_mb
 from ..binary.scene_chunks import (
     AddedAttribute,
     Crea,
+    DataValue,
     ReferenceEdit,
     ReferenceEdits,
     decode_added_attribute,
     decode_connection,
     decode_crea,
+    decode_data,
     decode_double,
     decode_file_info,
     decode_includes,
     decode_instance,
     decode_metadata,
+    decode_numbers,
     decode_plugin,
     decode_reference,
     decode_reference_edits,
@@ -32,6 +35,7 @@ from ..binary.scene_chunks import (
     encode_includes,
     encode_instance,
     encode_metadata,
+    encode_number,
     encode_reference_edits,
     encode_relationship,
     encode_string,
@@ -40,6 +44,7 @@ from ..binary.scene_chunks import (
     encode_u32,
     format_uuid,
     join_attribute,
+    number_offset,
     reference_file_type,
     replace_reference_file_type,
     replace_reference_strings,
@@ -49,6 +54,7 @@ from ..binary.scene_chunks import (
 )
 from ..data.node_types import DEFAULT_NODES, TYPE_NAMES
 from ..metadata import CODEPAGE
+from ..resolvers.attribute_specs import NUMBER_KINDS
 from ..units import Units
 from .base import (
     AttributeRecord,
@@ -56,7 +62,9 @@ from .base import (
     ConnectionRecord,
     InstanceRecord,
     NodeRecord,
+    Numbers,
     Plugin,
+    RecordFlags,
     ReferenceRecord,
     RelationshipRecord,
     SceneStorage,
@@ -78,6 +86,22 @@ _CONNECT_ROLES_BOTH, _CONNECT_ROLES_ONE = "npppp-", "npp-"
 # against the type hierarchy, fixtures and production files)
 _DAG_FLAG = 0x04
 _TRANSFORM_FLAG = 0x08
+# Attribute chunk flags, measured against `setAttr -l`, `-k` and `-cb`
+_LOCKED = 0x01
+_KEYABLE = 0x04
+_CHANNEL_BOX = 0x10
+# Tag of a value of each numeric compound kind
+_COMPOUND_TAGS = {
+    "double2": b"DBL2",
+    "double3": b"DBL3",
+    "double4": b"DBL4",
+    "float2": b"FLT2",
+    "float3": b"FLT3",
+    "long2": b"LNG2",
+    "long3": b"LNG3",
+    "short2": b"SRT2",
+    "compound": b"CMPD",
+}
 
 
 class MbAttribute(AttributeRecord):
@@ -121,6 +145,41 @@ class MbAttribute(AttributeRecord):
         if self._chunk.tag != b"DBLE" or len(raw) != 8:
             raise NotImplementedError(f"{self.type} values are not decoded yet")
         return decode_double(raw)
+
+    @property
+    def flags(self) -> RecordFlags:
+        _, flags, _ = split_attribute(self._chunk.data)
+        return RecordFlags(
+            bool(flags & _LOCKED),
+            bool(flags & _KEYABLE),
+            bool(flags & _CHANNEL_BOX),
+        )
+
+    def set_flags(self, flags: RecordFlags) -> None:
+        name, byte, raw = split_attribute(self._chunk.data)
+        for bit, state in (
+            (_LOCKED, flags.locked),
+            (_KEYABLE, flags.keyable),
+            (_CHANNEL_BOX, flags.channel_box),
+        ):
+            if state is not None:
+                byte = byte | bit if state else byte & ~bit
+        self._chunk.data = join_attribute(name, byte, raw)
+
+    def numbers(self, kinds: Sequence[str | None]) -> Numbers:
+        _, flags, raw = split_attribute(self._chunk.data)
+        return decode_numbers(self._chunk.tag, flags, raw, kinds)
+
+    def set_number(self, position: int, kind: str | None, value: float) -> None:
+        name, flags, raw = split_attribute(self._chunk.data)
+        at = number_offset(self._chunk.tag, flags, position)
+        encoded = encode_number(self._chunk.tag, kind, value)
+        raw = raw[:at] + encoded + raw[at + len(encoded) :]
+        self._chunk.data = join_attribute(name, flags, raw)
+
+    def data(self) -> DataValue | None:
+        _, _, raw = split_attribute(self._chunk.data)
+        return decode_data(self._chunk.tag, raw)
 
     def mentions(self, text: str) -> bool:
         return encode_text(text) in self._chunk.data
@@ -213,6 +272,42 @@ class MbNode(NodeRecord):
             for chunk in self._group.chunks[1:]
             if isinstance(chunk, Chunk) and chunk.tag == b"ATTR"
         ]
+
+    def add_record(
+        self,
+        name: str,
+        kind: str,
+        kinds: Sequence[str | None],
+        value: Sequence[float] | str | None,
+        flags: RecordFlags,
+        defaults: RecordFlags,
+    ) -> AttributeRecord:
+        if value is None:
+            tag, raw = b"FLGS", b""
+        elif isinstance(value, str):
+            tag, raw = b"STR ", encode_string(value)
+        else:
+            found = b"DBLE" if kind in NUMBER_KINDS else _COMPOUND_TAGS.get(kind)
+            if found is None:
+                raise NotImplementedError(f"storing {kind} values")
+            tag = found
+            parts = []
+            for position, number in enumerate(value):
+                number_kind = kinds[position % len(kinds)] if kinds else None
+                parts.append(encode_number(tag, number_kind, number))
+            raw = b"".join(parts)
+        # Maya sets 0x20 on nearly every attribute chunk, its meaning unknown
+        byte = 0x20
+        for bit, state in (
+            (_LOCKED, flags.locked),
+            (_KEYABLE, flags.keyable),
+            (_CHANNEL_BOX, flags.channel_box),
+        ):
+            if state:
+                byte |= bit
+        chunk = Chunk(tag, join_attribute(name, byte, raw))
+        self._group.chunks.append(chunk)
+        return MbAttribute(chunk)
 
 
 class MbReference(ReferenceRecord):
@@ -334,6 +429,7 @@ class MbScene(SceneStorage):
     """A `.mb` file: header, references, node groups, connections, trailer."""
 
     codepage = CODEPAGE
+    internal_units = True
 
     def __init__(self, data: bytes) -> None:
         self._root = read_mb(data)

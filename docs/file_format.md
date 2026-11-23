@@ -151,22 +151,84 @@ value, like `setAttr -cb on ".rx"`, plus the count when bit `0x08` is set,
 like `setAttr -s 3 ".g"`. Bit `0x08` shows up on `FLGS` and empty `CMPD`
 chunks only, in 78 files including 25 production files.
 
+- **Only while a flag is off its default.** A flags-only record exists while
+  some flag differs from the attribute's default. Unlocking a plug in Maya
+  removes its record.
+- **Locks reach children.** Locking a compound locks its children for
+  `getAttr -l` and `setAttr`. Locking a child leaves the parent unlocked. The
+  file stores the lock on the attribute that was locked only.
+- **Not on data records.** On string, matrix and array records the keyable
+  and channel box bits are not the attribute's state. Maya 2022 reports a
+  keyable string attribute whose `STR ` chunk has the keyable bit clear.
+- **`setAttr` refusals.** Maya refuses `setAttr` on a locked or connected plug
+  ("locked or connected and cannot be modified"), and accepts it on a plug an
+  animation curve drives.
+
 ### Attribute values
 
-Values are big-endian. `.mb` stores lengths in centimetres and angles in
-radians whatever the scene's `currentUnit`, and `.ma` writes them in the
-scene's units, as measured with a scene in metres and degrees. `xform`
-matrices hold radians in both formats.
+Values are big-endian. `.mb` stores lengths in centimetres, angles in
+radians and times in ticks whatever the scene's `currentUnit`, and `.ma`
+writes them in the scene's units, times as frames at the scene's rate,
+as measured with a scene in metres, degrees and ntsc. Matrices are never
+converted, neither in `.ma` nor by `getAttr`. `xform` matrices hold
+centimetres and radians in both formats, and a matrix set to translate by
+1, 2, 3 in a scene in metres is stored and read as 1, 2, 3.
 
 | Tag | Value |
 |---|---|
 | `DBLE` | Doubles, also booleans, integers, enums and times |
-| `DBL2`, `DBL3`, `FLT2`, `FLT3` | Doubles or 32-bit floats, as many as the `.ma` statement lists |
+| `DBL2`, `DBL3`, `DBL4`, `FLT2`, `FLT3` | Doubles or 32-bit floats, as many as the `.ma` statement lists |
+| `LNG2`, `LNG3`, `SRT2` | int32 or int16 values |
+| `CMPD` | 8 bytes per child value, doubles but for times (int64 ticks), also for float children |
 | `STR ` | NUL-terminated text |
 | `STR#` | u32 count, then NUL-terminated strings |
 | `I32#`, `DBL#` | int32 or double values with no count, the chunk size gives it |
 | `PNT#` | 4 doubles per point, no count |
+| `VEC#` | 3 doubles per vector, no count |
 | `MATR` | 16 doubles, or 328 bytes for an `xform` matrix |
+
+`.ma` writes a range of more than a few hundred elements as several
+statements (`.uvst[0].uvsp[0:249]`, then `[250:499]`), whose continuations
+leave `-type` out. Doubles are written with `%.17g` in matrices. Elsewhere
+some attributes use `%.17g` and others 15 digits when those read back
+exactly. Floats take 7 to 10 digits with no rule found. Negative zero is
+written `0`.
+
+The time units are written the same in both formats (`game`, `film`,
+`pal`, `ntsc`, `show`, `palf`, `ntscf`, `sec`, `millisec`, `min`, `hour`,
+`<N>fps`, `29.97df`). Linear and angle units are short in `.mb` headers and
+long in `.ma`'s `currentUnit`:
+
+| `.mb` | `mm` | `cm` | `m` | `km` | `in` | `ft` | `yd` | `mi` | `deg` | `rad` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `.ma` | `millimeter` | `centimeter` | `meter` | `kilometer` | `inch` | `foot` | `yard` | `mile` | `degree` | `radian` |
+
+A frame lasts 141120000 ticks divided by the rate. Fractional rates are a
+whole rate times 1000/1001, so `23.976fps` is 5885880 ticks a frame and
+`29.97df` 4708704.
+
+### Plugs across records
+
+One plug can be set by several records, alike in both formats:
+
+- a value record and a flags record (`.r` and `setAttr -l on ".r"`);
+- a parent compound's record (`.t` for `tx`);
+- a range holding the element (`pt[1:166]` for `pt[5]`).
+
+They differ in two ways. `.mb` stores a compound's children apart when they
+are off their default (`ovcr`, `ovcg`), where `.ma` writes the parent
+(`ovrgb`). And `.mb` has size-only `FLGS` chunks and empty `CMPD` chunks
+that `.ma` leaves out. When a child of an unstored compound is set, Maya
+writes the whole parent (`.t` `5 0 0`).
+
+Plugs the file does not set hold the value a new node of the type starts
+with. That is the attribute's default, except on 112 types whose new nodes
+start elsewhere: animation curves start with `ihi` 0 and `roti` 1, against
+defaults of 2. Default nodes (`select -ne`) are no exception: every value a
+new scene gives them off the attribute default is stored. Elements of the
+multis a node keeps itself (mesh vertices, animation key tangents) are not
+in the file unless set. A multi's stored size can count elements the file
+does not list (`pt[0]` at its default before `pt[1:299]`).
 
 `DBLE` stores a time as int64 ticks, 141120000 per second. Read as a double,
 a positive tick count is a subnormal number and a negative one is a NaN, so
@@ -201,8 +263,8 @@ nodes. Doubles unless noted:
 
 `.ma` lists the same fields in the same order, without the extra quaternion,
 with the pivots not negated, and ends with `yes` or `no` for segment scale
-compensate. All 38 values match on the 1015 `xform` matrices of the fixtures,
-probes and production twins.
+compensate. All 37 values match on the 1015 `xform` matrices of the fixtures,
+probes and production twins. `getAttr` gives the composed 16-value matrix.
 
 ### Meshes
 
@@ -351,7 +413,10 @@ then `createNode` blocks, `select -ne` blocks for default nodes,
 `dataStructure` + `applyMetadata` pair, then a `// End of` comment. Some
 production files lack the header comments, and some are empty. 3300 of the
 3305 production `.ma` files split into `;`-terminated statements and join back
-byte for byte; the other 5 hold `.mb` chunks partway through.
+byte for byte; the other 5 hold `.mb` chunks partway through. Split this way,
+the first statement carries the header comments in front of it, which a
+reader must skip before reading its words (`requires maya "2022"` when the
+file has no reference).
 
 - A node is `createNode <type> [-s] -n "name" [-p "parent"]`, followed by its
   own statements: `rename -uid "<UUID>"`, `setAttr`, `addAttr`, `lockNode`.
