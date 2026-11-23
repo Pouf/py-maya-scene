@@ -11,6 +11,7 @@ from ..binary.scene_chunks import AddedAttribute, ReferenceEdit, ReferenceEdits
 from ..data.node_types import DEFAULT_NODES, PARENT_TYPES, TYPE_NAMES
 from ..mel import number, quote, unquote
 from ..resolvers.file_attributes import type_chain
+from ..units import Units, short_unit_name
 from .base import (
     AttributeRecord,
     AttributeValue,
@@ -34,31 +35,35 @@ _EDIT_STRINGS = {0: 3, 1: 4, 2: 3, 3: 3, 4: 3, 8: 2, 9: 2}
 
 # Long spellings of the flags read here, for the commands that read them:
 # Maya writes short flags, but scripts that write `.ma` files may not
-# (`createNode transform -name "ALL"`)
+# (`createNode transform -name "ALL"`). A short flag of two commands has the
+# long spelling of each (`-l`, `currentUnit -linear` and `setAttr -lock`)
 _LONG_FLAGS = {
-    "-n": "-name",
-    "-p": "-parent",
-    "-uid": "-uuid",
-    "-r": "-reference",
-    "-rdi": "-referenceDepthInfo",
-    "-ns": "-namespace",
-    "-dr": "-deferReference",
-    "-rfn": "-referenceNode",
-    "-typ": "-type",
-    "-na": "-nextAvailable",
-    "-ne": "-noExpand",
-    "-add": "-addObject",
-    "-nt": "-nodeType",
-    "-v": "-value",
-    "-ln": "-longName",
-    "-sn": "-shortName",
-    "-uaf": "-usedAsFilename",
+    "-n": ("-name",),
+    "-p": ("-parent",),
+    "-uid": ("-uuid",),
+    "-r": ("-reference",),
+    "-rdi": ("-referenceDepthInfo",),
+    "-ns": ("-namespace",),
+    "-dr": ("-deferReference",),
+    "-rfn": ("-referenceNode",),
+    "-typ": ("-type",),
+    "-na": ("-nextAvailable",),
+    "-ne": ("-noExpand",),
+    "-add": ("-addObject",),
+    "-nt": ("-nodeType",),
+    "-v": ("-value",),
+    "-ln": ("-longName",),
+    "-sn": ("-shortName",),
+    "-uaf": ("-usedAsFilename",),
+    "-l": ("-linear", "-lock"),
+    "-a": ("-angle",),
+    "-t": ("-time",),
 }
 
 
 def _is_flag(token: Token, flag: str) -> bool:
     """Whether `token` is `flag`, in its short or long spelling."""
-    return token.text == flag or token.text == _LONG_FLAGS[flag]
+    return token.text == flag or token.text in _LONG_FLAGS[flag]
 
 
 def _flag_value(tokens: list[Token], flag: str) -> int | None:
@@ -563,6 +568,7 @@ class MaScene(SceneStorage):
         self._instances: list[int] = []
         self._file_info: list[int] = []
         self._requires: list[int] = []
+        self._current_unit: int | None = None
         self._metadata: int | None = None
         self._parents: set[str] | None = None
         node_start = None
@@ -592,6 +598,8 @@ class MaScene(SceneStorage):
                 self._file_info.append(index)
             elif command == "requires":
                 self._requires.append(index)
+            elif command == "currentUnit":
+                self._current_unit = index
             elif command == "applyMetadata":
                 self._metadata = index
         if node_start is not None:
@@ -613,6 +621,19 @@ class MaScene(SceneStorage):
             if len(tokens) > 2 and tokens[1].text == "maya":
                 return _read(self._document, tokens[2].text)
         return ""
+
+    @property
+    def units(self) -> Units:
+        if self._current_unit is None:
+            return Units()
+        tokens = self._document.tokens(self._current_unit)
+        names = {}
+        for flag, field in (("-l", "linear"), ("-a", "angle"), ("-t", "time")):
+            position = _flag_value(tokens, flag)
+            if position is not None:
+                text = _read(self._document, tokens[position].text)
+                names[field] = short_unit_name(text)
+        return Units(**names)
 
     @property
     def file_info(self) -> dict[str, str]:
