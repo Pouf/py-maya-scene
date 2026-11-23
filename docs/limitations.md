@@ -9,12 +9,12 @@ py_maya_scene sees what the file stores. Referenced files are not loaded, so
 the nodes they hold are not in `Scene.nodes`; only the reference itself and
 the edits the file makes to referenced nodes are.
 
-## Plug values
+## Attribute values
 
-`Node.plug()` gives the value and flags the file gives a plug, which is what
-`getAttr` gives for most plugs. Not always:
+`Node.attr()` gives the value and flags the file gives an attribute, which is
+what `getAttr` gives for most attributes. Not always:
 
-- A plug driven by a connection or an animation curve gives its stored
+- An attribute driven by a connection or an animation curve gives its stored
   static value, not the evaluated one.
 - These raise `NotImplementedError`:
   - outputs Maya computes and never stores (`worldMatrix`);
@@ -34,10 +34,16 @@ the edits the file makes to referenced nodes are.
 - A multi lists the elements the file stores. Elements at their default can
   be left out, even when Maya counts them.
 
-Setting a plug writes into the records that hold it, or adds a record of its
-own. Maya would sometimes write a parent attribute instead (`.t` for `tx`),
-which reads the same. Numbers are written in their shortest exact form, not
-always with Maya's digits. A locked or connected plug is refused, as in Maya.
+Setting an attribute writes into the records that hold it, or adds a record
+of its own. Maya would sometimes write a parent attribute instead (`.t` for
+`tx`), which reads the same. Numbers are written in their shortest exact
+form, not always with Maya's digits. A locked or connected attribute is
+refused, as in Maya. `remap_paths` and `rename` rewrite locked and connected
+attributes all the same.
+
+`Node.attributes` lists what the file stores, which differs between formats
+for the same scene. `.mb` keeps mesh geometry and some animation curve arrays
+out of attribute records, where `.ma` writes `setAttr` statements.
 
 ## Dependencies
 
@@ -74,5 +80,5 @@ Maya 2018 to 2025 (`FOR8` files).
 ## Not available yet
 
 - Converting between `.ma` and `.mb`
-- A `maya.cmds`-like API on a scene file, beyond plug values and flags
+- A `maya.cmds`-like API on a scene file, beyond attribute values and flags
 - Adding or removing attributes and connections

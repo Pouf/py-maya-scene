@@ -1,6 +1,7 @@
 """Scene model."""
 
-from .node import Attribute, Node
+from .attribute import Attribute
+from .node import Node
 from .reference import Reference
 from .scene import Connection, Dependency, Scene
 

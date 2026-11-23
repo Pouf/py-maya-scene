@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
-from ..binary.scene_chunks import float32
+from ..binary.scene_chunks import ReferenceEdits, float32
 from ..resolvers.attribute_specs import NUMBER_KINDS
 from ..resolvers.file_attributes import type_chain
 from ..storage.base import RecordFlags
@@ -14,11 +14,12 @@ from ..units import TICKS_PER_SECOND
 
 if TYPE_CHECKING:
     from ..resolvers.attribute_specs import AttributeSpec
-    from ..storage.base import AttributeRecord
+    from ..storage.base import AttributeRecord, AttributeValue
     from .node import Node
 
 # An attribute name with an optional index or index range, like `pt[0:9]`
 _COMPONENT = re.compile(r"([^.\[\]]+)(?:\[(\d+)(?::(\d+))?\])?")
+_INDEX = re.compile(r"\[[^\]]*\]")
 _FLOAT_KINDS = frozenset(("float", "flinear", "fangle"))
 _INT_KINDS = frozenset(("byte", "char", "short", "long", "int64", "enum"))
 _LINEAR_KINDS = frozenset(("linear", "flinear"))
@@ -31,14 +32,23 @@ _DATA_KINDS = frozenset(
     "string stringArray matrix doubleArray Int32Array pointArray vectorArray".split()
 )
 
-# Attribute name and index range of each level of a plug path
+# Records whose value they decode themselves, strings, string arrays and
+# reference edits
+_RECORD_TYPES = ("STR", "STR#", "REFE")
+
+# Attribute name and index range of each level of an attribute path
 Component = Tuple[str, Optional[Tuple[int, int]]]
-# Where a number of a plug's value sits, by element index for a multi plug
+# Where a number of a value sits, by element index for a multi attribute
 # and by child for a compound
 Leaf = Tuple[int, ...]
 # A record holding a number of the value, with the number's position in it,
 # the number in the file's units and its kind
 Source = Tuple["AttributeRecord", int, float, Optional[str]]
+
+
+def leaf_name(attribute: str) -> str:
+    """The attribute itself, without indices or parents (`uvst[0].uvsn` > `uvsn`)."""
+    return _INDEX.sub("", attribute).split(".")[-1]
 
 
 def parse_path(name: str) -> list[Component]:
@@ -60,7 +70,7 @@ def full_path(
     components: list[Component], specs: dict[str, AttributeSpec]
 ) -> list[Component]:
     """`components` with the compound parents a stored name leaves out
-    (`ovcr` > `do.ovrgb.ovcr`), so plugs and records compare level by level."""
+    (`ovcr` > `do.ovrgb.ovcr`), so attributes and records compare level by level."""
     path: list[Component] = []
     for name, index in components:
         previous = path[-1][0] if path else None
@@ -105,14 +115,68 @@ def _prefix_matches(path: list[Component], record: list[Component], count: int) 
     return True
 
 
-class Plug:
+def path_name(path: list[Component]) -> str:
+    """The name files write for `path`, the multi elements that lead to the
+    attribute then the attribute, compound parents left out (`uvst[0].uvsp[5]`)."""
+    parts = []
+    last = len(path) - 1
+    for level, (name, index) in enumerate(path):
+        if index is None:
+            if level == last:
+                parts.append(name)
+        elif index[0] == index[1]:
+            parts.append(f"{name}[{index[0]}]")
+        else:
+            parts.append(f"{name}[{index[0]}:{index[1]}]")
+    return ".".join(parts)
+
+
+def attribute_path(
+    record: list[Component], specs: dict[str, AttributeSpec]
+) -> list[Component]:
+    """The attribute a record holds a part of, its numeric compound parent
+    for a child stored apart and its multi for elements."""
+    path = record
+    while len(path) > 1 and path[-1][1] is None:
+        parent = specs.get(path[-2][0])
+        if parent is None or not _number_compound(parent, specs):
+            break
+        path = path[:-1]
+    if path[-1][1] is not None:
+        path = path[:-1] + [(path[-1][0], None)]
+    return path
+
+
+def _number_compound(spec: AttributeSpec, specs: dict[str, AttributeSpec]) -> bool:
+    if not spec.children:
+        return False
+    for child in spec.children:
+        child_spec = specs.get(child)
+        if child_spec is None or child_spec.kind not in NUMBER_KINDS:
+            return False
+    return True
+
+
+def _record_type(value: Any) -> str:
+    """The type of the records that store `value`."""
+    if isinstance(value, str):
+        return "STR"
+    if isinstance(value, ReferenceEdits):
+        return "REFE"
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return "STR#"
+    raise TypeError(f"not a string, a list of str or reference edits: {value!r}")
+
+
+class Attribute:
     """One attribute of a node, or one element of a multi attribute, with the
     value and flags the file gives it, like `getAttr`.
 
     Values are in the scene's units (`Scene.units`). One number is a bool,
     int or float, a numeric compound a tuple, the elements of a multi
-    attribute and an array a list, and an `xform` matrix an `Xform`. The
-    file stores static values, so a plug driven by a connection or an
+    attribute and an array a list, and an `xform` matrix an `Xform`. String
+    arrays are lists of str and reference edits `ReferenceEdits`. The file
+    stores static values, so an attribute driven by a connection or an
     animation curve gives its stored value, not the evaluated one.
     """
 
@@ -125,7 +189,7 @@ class Plug:
         self._spec = specs.get(self._path[-1][0])
 
     def __repr__(self) -> str:
-        return f"Plug({self.node.name}.{self.name})"
+        return f"Attribute({self.node.name}.{self.name})"
 
     @property
     def spec(self) -> AttributeSpec | None:
@@ -166,7 +230,7 @@ class Plug:
             levels = len(record_path)
             kinds = self._kinds(record_path[-1][0])
             if levels == depth and record_path[-1][0] == path[-1][0]:
-                # The plug itself, a range holding it, or elements of a multi plug
+                # The attribute itself, a range holding it, or elements of a multi
                 if not _prefix_matches(path, record_path, depth - 1):
                     continue
                 index = path[-1][1]
@@ -196,7 +260,7 @@ class Plug:
                         source = (record, at, numbers[0][at], numbers[1][at])
                         leaves.setdefault(key, []).append(source)
             elif levels == depth - 1 and not array:
-                # A compound element holding the plug as one of its children
+                # A compound element holding the attribute as one of its children
                 parent_name = record_path[-1][0]
                 parent_spec = self.node._specs().get(parent_name)
                 if (
@@ -219,7 +283,7 @@ class Plug:
                     source = (record, at, numbers[0][at], numbers[1][at])
                     leaves.setdefault((), []).append(source)
             elif levels == depth + 1 and record_path[-1][0] in children:
-                # A child of the plug, or of one element of a multi plug
+                # A child of the attribute, or of one element of a multi
                 if record_path[-1][1] is not None:
                     continue
                 child = children.index(record_path[-1][0])
@@ -334,11 +398,16 @@ class Plug:
             raise NotImplementedError(f"{self} is mesh data, not decoded yet")
         if spec is not None and spec.kind in _DATA_KINDS:
             return self._data_value()
+        if not self._is_numeric():
+            # Strings of attributes no spec describes, reference edits
+            records = [r for r in self._exact_records() if r.type in _RECORD_TYPES]
+            if records:
+                return records[-1].get_value()
+            if spec is not None:
+                raise NotImplementedError(f"{spec.kind} values are not decoded yet")
         internal = self.node.scene._storage.internal_units
         if spec is None:
             return self._stored_numbers(internal)
-        if spec.kind not in NUMBER_KINDS and not self._number_compound(spec):
-            raise NotImplementedError(f"{spec.kind} values are not decoded yet")
         leaves = self._number_leaves()
         if not leaves and self._in_internal_multi():
             raise NotImplementedError(f"{self} is kept by the node, not stored")
@@ -352,12 +421,19 @@ class Plug:
     @value.setter
     def value(self, value: Any) -> None:
         """Store a value given in the scene's units, in every record that
-        holds the plug. Refused, as Maya refuses it, for a locked or connected
-        plug. A plug the file does not store gets a record of its own."""
+        holds the attribute. Refused, as Maya refuses it, for a locked or
+        connected attribute. An attribute the file does not store gets a
+        record of its own."""
         self._set_value(value)
 
+    def _is_numeric(self) -> bool:
+        spec = self._spec
+        if spec is None:
+            return False
+        return spec.kind in NUMBER_KINDS or _number_compound(spec, self.node._specs())
+
     def _in_internal_multi(self) -> bool:
-        """Whether the plug is, or is in, a multi whose elements the node keeps:
+        """Whether the attribute is, or is in, a multi whose elements the node keeps:
         the file leaves those out (mesh vertices, animation key tangents)."""
         specs = self.node._specs()
         for name, _ in self._path:
@@ -367,7 +443,7 @@ class Plug:
         return False
 
     def _stored_numbers(self, internal: bool) -> Any:
-        """The numbers of the last record named like the plug, as stored, for
+        """The numbers of the last record named like the attribute, as stored, for
         an attribute no spec describes. `.mb` times are found by their bits."""
         found = None
         for record, record_path in self._records():
@@ -381,15 +457,6 @@ class Plug:
         for number, kind in zip(*found):
             values.append(self._convert(number, kind, internal))
         return values[0] if len(values) == 1 else values
-
-    def _number_compound(self, spec: AttributeSpec) -> bool:
-        if not spec.children:
-            return False
-        for child in spec.children:
-            child_spec = self.node._specs().get(child)
-            if child_spec is None or child_spec.kind not in NUMBER_KINDS:
-                return False
-        return True
 
     def _element_value(
         self,
@@ -415,28 +482,19 @@ class Plug:
 
     def _set_value(self, value: Any) -> None:
         spec = self._spec
-        if spec is None:
-            raise NotImplementedError(f"no spec tells how to store {self}")
-        if not spec.storable:
+        if spec is not None and not spec.storable:
             raise ValueError(f"{self} is not stored, Maya computes it")
         if self.locked:
             raise ValueError(f"{self} is locked")
         if self._is_connected():
             raise ValueError(f"{self} is connected")
-        if spec.kind == "string":
-            if not isinstance(value, str):
-                raise TypeError(f"{self} takes a str")
-            records = [r for r in self._exact_records() if r.type == "STR"]
-            self.node.scene._before_edit()
-            for record in records:
-                record.set_value(value)
-            if not records:
-                self._add_record(value)
+        if spec is None or not self._is_numeric():
+            self._set_data(value)
             return
         numbers: dict[Leaf, Any]
         if spec.kind in NUMBER_KINDS:
             numbers = {(): value}
-        elif self._number_compound(spec) and not self._is_array():
+        elif not self._is_array():
             if len(value) != len(spec.children):
                 raise ValueError(f"{self} takes {len(spec.children)} values")
             numbers = {(child,): v for child, v in enumerate(value)}
@@ -448,7 +506,7 @@ class Plug:
         self.node.scene._before_edit()
         internal = self.node.scene._storage.internal_units
         if any(key not in leaves for key in numbers):
-            # A record of its own for the plug, which later records override
+            # A record of its own for the attribute, which later records override
             kinds = self._kinds(spec.short_name)
             stored = []
             for position, key in enumerate(sorted(numbers)):
@@ -459,20 +517,35 @@ class Plug:
             for record, position, _, kind in leaves[key]:
                 record.set_number(position, kind, self._to_file(number, kind, internal))
 
-    def _record_name(self) -> str:
-        """The plug's name as files write it, the attribute after the multi
-        elements that lead to it (`uvst[0].uvsp[5]`), compound parents left out."""
-        parts = []
-        last = len(self._path) - 1
-        for level, (name, index) in enumerate(self._path):
-            if index is not None:
-                parts.append(f"{name}[{index[0]}]")
-            elif level == last:
-                parts.append(name)
-        return ".".join(parts)
+    def _set_data(self, value: Any) -> None:
+        kind = self._spec.kind if self._spec is not None else None
+        if kind in _DATA_KINDS and kind not in ("string", "stringArray"):
+            raise NotImplementedError(f"setting {kind} values")
+        if kind == "string" and not isinstance(value, str):
+            raise TypeError(f"{self} takes a str")
+        if kind == "stringArray" and not isinstance(value, list):
+            raise TypeError(f"{self} takes a list of str")
+        if self._store(value):
+            return
+        if kind == "string":
+            self._add_record(value)
+            return
+        raise NotImplementedError(f"{self} has no record to store the value in")
+
+    def _store(self, value: AttributeValue) -> bool:
+        """Write `value` into the attribute's own records of its type, with no
+        lock or connection check. False when there are none."""
+        record_type = _record_type(value)
+        self.node.scene._before_edit()
+        stored = False
+        for record in self._exact_records():
+            if record.type == record_type:
+                record.set_value(value)
+                stored = True
+        return stored
 
     def _add_record(self, value: list[float] | str | None) -> None:
-        """Add a record for the plug, with its present flags."""
+        """Add a record for the attribute, with its present flags."""
         assert self._spec is not None  # set only with a spec
         own_lock = self._stated_flags()[0].get(len(self._path), False)
         flags = RecordFlags(own_lock, self.keyable, self.channel_box)
@@ -486,7 +559,7 @@ class Plug:
         defaults = RecordFlags(False, spec.keyable, spec.channel_box)
         kinds = self._kinds(spec.short_name)
         self.node._record.add_record(
-            self._record_name(), spec.kind, kinds, value, flags, defaults
+            path_name(self._path), spec.kind, kinds, value, flags, defaults
         )
         self.node._forget_records()
 
@@ -506,17 +579,17 @@ class Plug:
         return number
 
     def _is_connected(self) -> bool:
-        """Whether a connection drives the plug, one of its parents or children."""
+        """Whether a connection drives the attribute, one of its parents or children."""
         for connection in self.node.scene.connections:
             node_name, _, attribute = connection.destination.partition(".")
             if self.node.scene._find(node_name.lstrip(":")) is not self.node:
                 continue
-            if _overlap(self._path, Plug(self.node, attribute)._path):
+            if _overlap(self._path, Attribute(self.node, attribute)._path):
                 return True
         return False
 
     def _exact_records(self) -> list[AttributeRecord]:
-        """Records of the plug itself, not of a parent, child or wider range."""
+        """Records of the attribute itself, not of a parent, child or wider range."""
         found = []
         for record, record_path in self._records():
             if record_path == self._path:
@@ -526,8 +599,8 @@ class Plug:
     # Flags
 
     def _stated_flags(self) -> tuple[dict[int, bool], bool | None, bool | None]:
-        """Lock states by level of the plug and its ancestors, then the
-        keyable and channel box states the plug's own records give last."""
+        """Lock states by level of the attribute and its ancestors, then the
+        keyable and channel box states the attribute's own records give last."""
         path = self._path
         depth = len(path)
         locks: dict[int, bool] = {}
@@ -558,12 +631,12 @@ class Plug:
 
     @property
     def locked(self) -> bool:
-        """True when the plug or one of its compound or multi parents is locked."""
+        """True when the attribute or one of its compound or multi parents is locked."""
         return any(self._stated_flags()[0].values())
 
     @locked.setter
     def locked(self, value: bool) -> None:
-        # A locked parent keeps the plug locked, as in Maya
+        # A locked parent keeps the attribute locked, as in Maya
         self._set_flags(RecordFlags(value, None, None))
 
     @property

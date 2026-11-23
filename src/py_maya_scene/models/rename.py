@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING, List, Union
 
 from ..binary.scene_chunks import ReferenceEdits
 from ..mel import string_setattr_arguments, string_setattr_value
+from .attribute import leaf_name
 
 if TYPE_CHECKING:
     from typing import Callable
 
     from ..storage.base import ConnectionRecord, RelationshipRecord
-    from .node import Attribute, Node
+    from .node import Node
     from .scene import Scene
 
     Rewrite = Callable[[str], str]
@@ -162,7 +163,7 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
     needles = (old_name, new_name)
 
     # Compute every new value against the current names, then write them all
-    writes: list[Callable[[], None]] = []
+    writes: list[Callable[[], object]] = []
     for other in scene._nodes:
         parent_name = other.parent_name
         if parent_name is not None and any(n in parent_name for n in needles):
@@ -188,16 +189,16 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
         if in_strings:
             changed |= _rewrite_edit_strings(edits, rewrite_keeping_form)
         if changed:
-            writes.append(partial(_store_value, attribute, edits))
+            writes.append(partial(attribute._store, edits))
     if in_strings:
         for other in scene._nodes:
             mel = _MEL_ATTRIBUTES.get(other.type, ())
-            for attribute in other._string_attributes():
-                if not any(attribute._record.mentions(n) for n in needles):
+            for record in other._record.string_attributes():
+                if not any(record.mentions(n) for n in needles):
                     continue
-                value = attribute.value
+                value = record.get_value()
                 new_value: StringValue
-                if isinstance(value, str) and attribute.leaf_name in mel:
+                if isinstance(value, str) and leaf_name(record.name) in mel:
                     new_value = _MEL_PLUG_NODE.sub(
                         lambda m: rewrite_keeping_form(m.group(1)), value
                     )
@@ -210,7 +211,7 @@ def _rename_one(scene: Scene, node: Node, new_name: str, in_strings: bool) -> No
                 else:
                     continue
                 if new_value != value:
-                    writes.append(partial(_store_value, attribute, new_value))
+                    writes.append(partial(record.set_value, new_value))
     writes.append(partial(node._record.set_name, new_name))
     for write in writes:
         write()
@@ -293,7 +294,3 @@ def _rewrite_edit_strings(edits: ReferenceEdits, rewrite: Rewrite) -> bool:
                 edit.strings[2] = string_setattr_arguments(new)
                 changed = True
     return changed
-
-
-def _store_value(attribute: Attribute, value: StringValue) -> None:
-    attribute.value = value

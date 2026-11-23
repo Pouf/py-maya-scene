@@ -152,17 +152,17 @@ like `setAttr -s 3 ".g"`. Bit `0x08` shows up on `FLGS` and empty `CMPD`
 chunks only, in 78 files including 25 production files.
 
 - **Only while a flag is off its default.** A flags-only record exists while
-  some flag differs from the attribute's default. Unlocking a plug in Maya
-  removes its record.
+  some flag differs from the attribute's default. Unlocking an attribute in
+  Maya removes its record.
 - **Locks reach children.** Locking a compound locks its children for
   `getAttr -l` and `setAttr`. Locking a child leaves the parent unlocked. The
   file stores the lock on the attribute that was locked only.
 - **Not on data records.** On string, matrix and array records the keyable
   and channel box bits are not the attribute's state. Maya 2022 reports a
   keyable string attribute whose `STR ` chunk has the keyable bit clear.
-- **`setAttr` refusals.** Maya refuses `setAttr` on a locked or connected plug
-  ("locked or connected and cannot be modified"), and accepts it on a plug an
-  animation curve drives.
+- **`setAttr` refusals.** Maya refuses `setAttr` on a locked or connected
+  attribute ("locked or connected and cannot be modified"), and accepts it on
+  an attribute an animation curve drives.
 
 ### Attribute values
 
@@ -207,9 +207,9 @@ A frame lasts 141120000 ticks divided by the rate. Fractional rates are a
 whole rate times 1000/1001, so `23.976fps` is 5885880 ticks a frame and
 `29.97df` 4708704.
 
-### Plugs across records
+### Attributes across records
 
-One plug can be set by several records, alike in both formats:
+One attribute can be set by several records, alike in both formats:
 
 - a value record and a flags record (`.r` and `setAttr -l on ".r"`);
 - a parent compound's record (`.t` for `tx`);
@@ -221,7 +221,7 @@ are off their default (`ovcr`, `ovcg`), where `.ma` writes the parent
 that `.ma` leaves out. When a child of an unstored compound is set, Maya
 writes the whole parent (`.t` `5 0 0`).
 
-Plugs the file does not set hold the value a new node of the type starts
+Attributes the file does not set hold the value a new node of the type starts
 with. That is the attribute's default, except on 112 types whose new nodes
 start elsewhere: animation curves start with `ihi` 0 and `roti` 1, against
 defaults of 2. Default nodes (`select -ne`) are no exception: every value a

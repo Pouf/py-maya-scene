@@ -16,13 +16,14 @@ from ..resolvers.file_attributes import (
     file_attribute_short_name,
     type_chain,
 )
-from .node import Attribute, Node, leaf_name
+from .attribute import Attribute, leaf_name
+from .node import Node
 from .reference import Reference
 
 if TYPE_CHECKING:
     from typing import Callable, Iterable, Mapping
 
-    from ..storage.base import Plugin, SceneStorage
+    from ..storage.base import AttributeRecord, Plugin, SceneStorage
     from ..units import Units
 
     ExtraAttributes = Mapping[str, Iterable[str]]
@@ -100,9 +101,9 @@ class Scene:
             )
             if node is None or short is None:
                 continue
-            for attribute in node._string_attributes():
-                if attribute.name == short:
-                    bindings.append((row, node, attribute))
+            for record in node._record.string_attributes():
+                if record.name == short:
+                    bindings.append((row, node, record))
         self._content = (table, bindings)
 
     def _sync_content_table(self) -> None:
@@ -110,12 +111,12 @@ class Scene:
             return
         table, bindings = self._content
         changed = False
-        for row, owner, attribute in bindings:
-            if attribute is None:
+        for row, owner, record in bindings:
+            if record is None:
                 assert isinstance(owner, Reference)  # a reference's own row
                 node_name, path = owner.node, owner.path
             else:
-                value = attribute.value
+                value = record.get_value()
                 if not isinstance(value, str):
                     continue
                 node_name, path = owner.path, value
@@ -225,16 +226,15 @@ class Scene:
         ]
 
     def file_attributes(self, extra: ExtraAttributes | None = None) -> list[Attribute]:
-        """Stored string values of the attributes that hold file paths, the
-        ones Maya flags as file names in its schema or with `addAttr
-        -usedAsFilename`.
+        """The stored string attributes that hold file paths, the ones Maya
+        flags as file names in its schema or with `addAttr -usedAsFilename`.
 
         `extra` adds attributes per node type, as stored short names (for
         example `{"transform": ["icon_path"]}`); subtypes inherit them.
         """
         found: list[Attribute] = []
         for node in self._nodes:
-            strings = node._string_attributes()
+            strings = node._record.string_attributes()
             if not strings:
                 continue
             names = set(file_attribute_names(node.type))
@@ -244,7 +244,12 @@ class Scene:
             for added in node._record.added_attributes():
                 if added.used_as_filename:
                     names.add(added.short_name)
-            found.extend(a for a in strings if a.leaf_name in names)
+            stored: dict[str, None] = {}
+            for record in strings:
+                if leaf_name(record.name) in names:
+                    stored[record.name] = None
+            for name in stored:
+                found.append(Attribute(node, name))
         return found
 
     def reference_edits(self) -> list[tuple[Attribute, ReferenceEdits]]:
@@ -252,10 +257,10 @@ class Scene:
         found = []
         for node in self._nodes:
             if node.type == "reference":
-                for attribute in node.attributes:
-                    value = attribute.value if attribute.type == "REFE" else None
+                for record in node._record.attributes():
+                    value = record.get_value() if record.type == "REFE" else None
                     if isinstance(value, ReferenceEdits):
-                        found.append((attribute, value))
+                        found.append((Attribute(node, record.name), value))
         return found
 
     def _file_edits(
@@ -351,15 +356,16 @@ class Scene:
                 changed += 1
         for attribute in self.file_attributes(extra):
             value = attribute.value
+            # Locked or connected, the stored path is replaced all the same
             if isinstance(value, list):
                 new_values = [_remapped(remap, v) for v in value]
                 if new_values != value:
-                    attribute.value = new_values
+                    attribute._store(new_values)
                     changed += sum(a != b for a, b in zip(value, new_values))
             elif isinstance(value, str) and value:
                 new_value = _remapped(remap, value)
                 if new_value != value:
-                    attribute.value = new_value
+                    attribute._store(new_value)
                     changed += 1
         edited: dict[Attribute, ReferenceEdits] = {}
         for attribute, edits, edit, path in self._file_edits(extra):
@@ -369,7 +375,7 @@ class Scene:
                 edited[attribute] = edits
                 changed += 1
         for attribute, edits in edited.items():
-            attribute.value = edits
+            attribute._store(edits)
         return changed
 
     def replace_strings(self, replace: Callable[[str], str]) -> int:
@@ -473,4 +479,4 @@ def _resolved(path: str) -> str:
     return expanded.replace("\\", "/") if os.path.isfile(expanded) else ""
 
 
-_ContentBinding = Tuple[ContentRow, Union[Node, Reference], Optional[Attribute]]
+_ContentBinding = Tuple[ContentRow, Union[Node, Reference], Optional["AttributeRecord"]]
